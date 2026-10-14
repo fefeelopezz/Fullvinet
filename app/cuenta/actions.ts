@@ -1,0 +1,38 @@
+"use server";
+
+import { redirect } from "next/navigation";
+import { Preference } from "mercadopago";
+import { mp } from "@/lib/mercadopago";
+import { getProfile } from "@/lib/supabase/server";
+
+export async function pay(formData: FormData) {
+  const { supabase, profile } = await getProfile();
+  // RLS garantiza que solo puede leer sus propias facturas
+  const { data: inv } = await supabase
+    .from("invoices")
+    .select("id, amount, period, status")
+    .eq("id", String(formData.get("invoice_id")))
+    .single();
+  if (!inv || inv.status !== "pending") redirect("/cuenta");
+
+  const site = process.env.NEXT_PUBLIC_SITE_URL!;
+  const isPublic = site.startsWith("https://"); // MP no acepta localhost en notification_url / auto_return
+  const plan = Array.isArray(profile.plans) ? profile.plans[0] : profile.plans;
+
+  const pref = await new Preference(mp).create({
+    body: {
+      items: [{
+        id: inv.id,
+        title: `Internet ${plan?.name ?? ""} · ${inv.period.slice(0, 7)}`,
+        quantity: 1,
+        unit_price: Number(inv.amount),
+        currency_id: "ARS",
+      }],
+      payer: { email: profile.email },
+      external_reference: inv.id,
+      back_urls: { success: `${site}/cuenta`, failure: `${site}/cuenta`, pending: `${site}/cuenta` },
+      ...(isPublic && { auto_return: "approved", notification_url: `${site}/api/mercadopago/webhook` }),
+    },
+  });
+  redirect(pref.init_point!);
+}
