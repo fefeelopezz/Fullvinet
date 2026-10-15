@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 
 const back = (tab: string, msg: string) =>
   redirect(`/login?tab=${tab}&error=${encodeURIComponent(msg)}`);
@@ -13,7 +13,11 @@ export async function login(formData: FormData) {
     email: String(formData.get("email")),
     password: String(formData.get("password")),
   });
-  if (error) back("login", "Email o contraseña incorrectos");
+  if (error) {
+    back("login", error.code === "email_not_confirmed"
+      ? "Tu cuenta todavía no está confirmada. Escribinos por WhatsApp y la activamos."
+      : error.code === "invalid_credentials" ? "Email o contraseña incorrectos" : error.message);
+  }
   // Cambió la sesión: descarta páginas cacheadas del usuario anterior
   revalidatePath("/", "layout");
   redirect("/");
@@ -25,16 +29,26 @@ export async function signup(formData: FormData) {
   const plan_id = String(formData.get("plan_id") ?? "");
   if (!full_name || !address || !/^\d+$/.test(plan_id)) back("signup", "Completá nombre, dirección y plan");
 
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.signUp({
-    email: String(formData.get("email")),
-    password: String(formData.get("password")),
-    options: { data: { full_name, address, plan_id } },
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const password = String(formData.get("password") ?? "");
+  if (password.length < 6) back("signup", "La contraseña debe tener al menos 6 caracteres");
+
+  // Sin email de confirmación (no hay proveedor de correo): la cuenta se crea ya confirmada.
+  // El trigger on_auth_user_created crea el perfil y la factura del mes.
+  const { error } = await createAdminClient().auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name, address, plan_id },
   });
-  if (error) back("signup", error.message);
-  // Con confirmación de email activa no hay sesión todavía
+  if (error) {
+    back("signup", error.code === "email_exists" ? "Ya existe una cuenta con ese email" : error.message);
+  }
+
+  const supabase = await createClient();
+  const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
+  if (loginError) back("login", "Cuenta creada. Ingresá con tu email y contraseña.");
   revalidatePath("/", "layout");
-  if (!data.session) redirect(`/login?msg=${encodeURIComponent("Revisá tu email para confirmar la cuenta")}`);
   redirect("/");
 }
 
