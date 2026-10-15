@@ -10,7 +10,8 @@ const back = (tab: string, msg: string) =>
 export async function login(formData: FormData) {
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({
-    email: String(formData.get("email")),
+    // El autocompletado/celular suele agregar espacios: Supabase los rechaza como credenciales inválidas
+    email: String(formData.get("email") ?? "").trim().toLowerCase(),
     password: String(formData.get("password")),
   });
   if (error) {
