@@ -12,7 +12,7 @@ import { pay } from "./actions";
 export const instant = false;
 
 export default async function CuentaPage({ searchParams }: PageProps<"/cuenta">) {
-  const { payment_id, status } = await searchParams;
+  const { payment_id, status, detail } = await searchParams;
   // Vuelta del checkout: conciliamos ya, por si el webhook todavía no llegó (o en localhost)
   if (typeof payment_id === "string" && /^\d+$/.test(payment_id)) {
     await syncPayment(payment_id).catch((e) => console.error("syncPayment", e));
@@ -44,7 +44,10 @@ export default async function CuentaPage({ searchParams }: PageProps<"/cuenta">)
 
       {status === "approved" && <p className="text-sm">¡Pago recibido! Gracias.</p>}
       {status === "error" && (
-        <p role="alert" className="text-sm text-destructive">No pudimos iniciar el pago con Mercado Pago. Probá de nuevo en unos minutos.</p>
+        <div role="alert" className="text-sm text-destructive">
+          <p>No pudimos iniciar el pago con Mercado Pago. Probá de nuevo en unos minutos.</p>
+          {detail && <p className="text-xs opacity-80">Detalle: {detail}</p>}
+        </div>
       )}
       {(status === "rejected" || status === "failure") && (
         <p role="alert" className="text-sm text-destructive">El pago no se completó. Probá de nuevo.</p>

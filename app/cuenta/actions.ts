@@ -23,6 +23,7 @@ export async function pay(formData: FormData) {
   const plan = Array.isArray(profile.plans) ? profile.plans[0] : profile.plans;
 
   let url: string | undefined;
+  let detail: string | undefined;
   try {
     const pref = await new Preference(mp).create({
       body: {
@@ -42,7 +43,9 @@ export async function pay(formData: FormData) {
     url = pref.init_point;
   } catch (e) {
     console.error("MercadoPago preference", e);
+    // Mensaje de la API de MP (sin datos sensibles) para diagnosticar desde la página
+    detail = e instanceof Error ? e.message : String(e);
   }
   // redirect fuera del try: lanza una excepción interna que no hay que capturar
-  redirect(url ?? "/cuenta?status=error");
+  redirect(url ?? `/cuenta?status=error&detail=${encodeURIComponent(detail ?? "sin respuesta")}`);
 }
