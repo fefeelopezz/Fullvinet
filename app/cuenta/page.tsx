@@ -13,12 +13,13 @@ export const instant = false;
 
 export default async function CuentaPage({ searchParams }: PageProps<"/cuenta">) {
   const { payment_id, status, detail } = await searchParams;
+  // getProfile primero: marca la página como dinámica (el SDK de MP genera IDs aleatorios)
+  const { supabase, profile } = await getProfile();
   // Vuelta del checkout: conciliamos ya, por si el webhook todavía no llegó (o en localhost)
   if (typeof payment_id === "string" && /^\d+$/.test(payment_id)) {
     await syncPayment(payment_id).catch((e) => console.error("syncPayment", e));
   }
 
-  const { supabase, profile } = await getProfile();
   const plan = Array.isArray(profile.plans) ? profile.plans[0] : profile.plans;
   // Pagos aprobados que no se reflejaron (cerró el checkout sin volver y sin webhook)
   const { data: unpaid } = await supabase.from("invoices").select("id").eq("status", "pending");
