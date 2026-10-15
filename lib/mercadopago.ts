@@ -4,6 +4,12 @@ import { createAdminClient } from "@/lib/supabase/server";
 
 export const mp = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN! });
 
+// Red de seguridad si no volvió del checkout y el webhook no llegó (p. ej. en localhost)
+export async function syncInvoice(invoiceId: string) {
+  const { results } = await new Payment(mp).search({ options: { external_reference: invoiceId, status: "approved" } });
+  for (const p of results ?? []) if (p.id) await syncPayment(String(p.id));
+}
+
 // Marca la factura como pagada consultando el pago a la API de MP (nunca confiamos en el cliente).
 // Idempotente: lo usan el webhook y la vuelta del checkout.
 export async function syncPayment(paymentId: string) {

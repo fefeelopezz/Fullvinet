@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusBadge } from "@/components/status-badge";
-import { syncPayment } from "@/lib/mercadopago";
+import { syncInvoice, syncPayment } from "@/lib/mercadopago";
 import { getProfile } from "@/lib/supabase/server";
 import { ars } from "@/lib/utils";
 import { logout } from "../login/actions";
@@ -20,6 +20,10 @@ export default async function CuentaPage({ searchParams }: PageProps<"/cuenta">)
 
   const { supabase, profile } = await getProfile();
   const plan = Array.isArray(profile.plans) ? profile.plans[0] : profile.plans;
+  // Pagos aprobados que no se reflejaron (cerró el checkout sin volver y sin webhook)
+  const { data: unpaid } = await supabase.from("invoices").select("id").eq("status", "pending");
+  await Promise.all((unpaid ?? []).map((i) => syncInvoice(i.id).catch((e) => console.error("syncInvoice", e))));
+
   const { data: invoices } = await supabase
     .from("invoices")
     .select("id, period, amount, status, paid_at")
@@ -39,6 +43,9 @@ export default async function CuentaPage({ searchParams }: PageProps<"/cuenta">)
       </header>
 
       {status === "approved" && <p className="text-sm">¡Pago recibido! Gracias.</p>}
+      {status === "error" && (
+        <p role="alert" className="text-sm text-destructive">No pudimos iniciar el pago con Mercado Pago. Probá de nuevo en unos minutos.</p>
+      )}
       {(status === "rejected" || status === "failure") && (
         <p role="alert" className="text-sm text-destructive">El pago no se completó. Probá de nuevo.</p>
       )}
@@ -46,7 +53,7 @@ export default async function CuentaPage({ searchParams }: PageProps<"/cuenta">)
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat title="Estado del servicio"><StatusBadge paid={pending.length === 0} /></Stat>
         <Stat title="Plan contratado">
-          {plan ? `${plan.name} · ${plan.speed_mbps} Mbps` : "Sin plan"}
+          {plan?.name ?? "Sin plan"}
         </Stat>
         <Stat title="Pagás por mes">{plan ? ars(plan.price) : "—"}</Stat>
       </div>

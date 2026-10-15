@@ -6,7 +6,7 @@ export type Plan = { id: number; name: string; speed_mbps: number; price: number
 export function PlanSelect({ plans, defaultValue }: { plans: Plan[]; defaultValue?: number | null }) {
   const items = plans.map((p) => ({
     value: String(p.id),
-    label: `${p.name} · ${p.speed_mbps} Mbps · ${ars(p.price)}`,
+    label: `${p.name} · ${ars(p.price)}`,
   }));
   return (
     <Select name="plan_id" required items={items} defaultValue={defaultValue ? String(defaultValue) : undefined}>

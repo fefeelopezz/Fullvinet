@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PlanSelect } from "@/components/plan-select";
 import { getPlans } from "@/lib/supabase/server";
+import { WhatsAppIcon } from "@/components/whatsapp-button";
+import { whatsappUrl } from "@/lib/utils";
 import { login, signup } from "./actions";
 
 export default function LoginPage({ searchParams }: PageProps<"/login">) {
@@ -31,11 +34,32 @@ async function LoginForms({ searchParams }: Pick<PageProps<"/login">, "searchPar
   const { tab, error, msg } = await searchParams;
   const plans = await getPlans();
 
+  // Base UI no muestra un panel sin pestaña propia: la recuperación reemplaza a las pestañas
+  if (tab === "reset") return (
+    <div className="space-y-3 pt-2">
+      <p className="text-sm text-muted-foreground">
+        Para recuperar tu contraseña escribinos por WhatsApp y te ayudamos a restablecerla.
+      </p>
+      <Button
+        nativeButton={false}
+        className="w-full bg-[#25D366] text-white hover:bg-[#25D366]/90"
+        render={<a href={whatsappUrl("Hola Fullvinet, necesito recuperar la contraseña de mi cuenta.")} target="_blank" rel="noopener noreferrer" />}
+      >
+        <WhatsAppIcon className="size-4" />
+        Contactar por WhatsApp
+      </Button>
+      <Link href="/login" className="block text-center text-sm text-muted-foreground hover:text-foreground">
+        Volver a ingresar
+      </Link>
+    </div>
+  );
+
   return (
     <>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
-      <Tabs defaultValue={tab === "signup" ? "signup" : "login"}>
+      {/* key: al navegar a otro ?tab= se vuelve a montar con esa pestaña */}
+      <Tabs key={String(tab)} defaultValue={tab === "signup" ? "signup" : "login"}>
         <TabsList className="w-full">
           <TabsTrigger value="login">Ingresar</TabsTrigger>
           <TabsTrigger value="signup">Crear cuenta</TabsTrigger>
@@ -46,6 +70,9 @@ async function LoginForms({ searchParams }: Pick<PageProps<"/login">, "searchPar
             <Field name="email" label="Email" type="email" />
             <Field name="password" label="Contraseña" type="password" />
             <Button type="submit" className="w-full">Ingresar</Button>
+            <Link href="/login?tab=reset" className="block text-center text-sm text-muted-foreground hover:text-foreground">
+              ¿Olvidaste tu contraseña?
+            </Link>
           </form>
         </TabsContent>
 

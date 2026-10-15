@@ -3,6 +3,7 @@ import { createServerClient } from "@supabase/ssr";
 import { createClient as createSbClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 
 export async function createClient() {
   const cookieStore = await cookies();
@@ -43,6 +44,7 @@ export async function getPlans() {
 }
 
 export async function getProfile() {
+  await connection(); // el cliente de auth usa Date.now(): renderizar solo por request
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");

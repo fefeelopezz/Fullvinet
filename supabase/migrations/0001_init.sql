@@ -71,6 +71,6 @@ revoke execute on function public.create_monthly_invoices() from public, anon, a
 revoke execute on function public.handle_new_user() from public, anon, authenticated;
 
 insert into public.plans (name, speed_mbps, price) values
-  ('Básico', 50, 15000),
+  ('Básico', , 15000),
   ('Hogar', 300, 25000),
   ('Fibra Pro', 1000, 40000);
