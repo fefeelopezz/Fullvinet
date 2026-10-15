@@ -1,5 +1,6 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { Preference } from "mercadopago";
 import { mp } from "@/lib/mercadopago";
@@ -15,7 +16,9 @@ export async function pay(formData: FormData) {
     .single();
   if (!inv || inv.status !== "pending") redirect("/cuenta");
 
-  const site = process.env.NEXT_PUBLIC_SITE_URL!;
+  // Dominio del propio pedido: localhost en dev, el de Vercel en producción, sin configurar nada
+  const h = await headers();
+  const site = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("x-forwarded-host") ?? h.get("host")}`;
   const isPublic = site.startsWith("https://"); // MP no acepta localhost en notification_url / auto_return
   const plan = Array.isArray(profile.plans) ? profile.plans[0] : profile.plans;
 
