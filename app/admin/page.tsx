@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,7 +25,6 @@ type Client = {
   invoices: Invoice[];
 };
 
-// Depende del usuario logueado: puede bloquear la navegación
 export const instant = false;
 
 export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
@@ -40,9 +39,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
       .eq("role", "user")
       .order("full_name"),
   ]);
-  // shortcut: trae todos los clientes y filtra en memoria; pasar los filtros a SQL si superan unos miles
   const all = (data ?? []) as unknown as Client[];
-  // Con mes elegido: la factura de ese mes decide el estado; sin mes, la última y si debe alguna
   const clients = all.flatMap((c) => {
     const sorted = [...c.invoices].sort((a, b) => b.period.localeCompare(a.period));
     const last = mes === "all" ? sorted[0] : sorted.find((i) => i.period.startsWith(mes));
@@ -60,7 +57,6 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
       (estado === "all" || (estado === "paid") === c.paid),
   );
 
-  // Links temporales (1 h) a los comprobantes del bucket privado
   const receiptPaths = rows.flatMap((c) => (c.last?.receipt_path ? [c.last.receipt_path] : []));
   const { data: signed } = receiptPaths.length
     ? await db.storage.from("comprobantes").createSignedUrls(receiptPaths, 3600)
@@ -76,6 +72,11 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
       label: new Date(`${m}-15T12:00:00`).toLocaleDateString("es-AR", { month: "long", year: "numeric" }),
     })),
   ];
+  const currentMonth = new Date().toLocaleDateString("es-AR", {
+    month: "long",
+    year: "numeric",
+    timeZone: "America/Argentina/Buenos_Aires",
+  });
   const estadoItems = [
     { value: "all", label: "Todos los estados" },
     { value: "paid", label: "Pagado" },
@@ -87,7 +88,6 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Panel de administración</h1>
         <div className="flex flex-wrap gap-2">
-          {/* key: tras guardar cambia la URL (ok/error) y el diálogo se vuelve a montar cerrado */}
           <AddClient key={ok ?? error ?? ""} plans={plans ?? []} />
           <form action={logout}><Button type="submit" variant="ghost" size="sm">Salir</Button></form>
         </div>
@@ -111,6 +111,14 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
       </form>
 
       <Card>
+        <CardHeader>
+          <CardTitle className="text-lg first-letter:uppercase">
+            Clientes · {mesItems.find((m) => m.value === mes && m.value !== "all")?.label ?? currentMonth}
+          </CardTitle>
+          <CardDescription>
+            {mes === "all" ? "Se muestra la última factura de cada cliente." : "Se muestra la factura de este mes."}
+          </CardDescription>
+        </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
@@ -122,16 +130,21 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                 <TableHead>{mes === "all" ? "Última factura" : "Factura del mes"}</TableHead>
                 <TableHead>Pago</TableHead>
                 <TableHead className="text-right">Acciones</TableHead>
+                <TableHead>Comprobante</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.map((c) => (
                 <TableRow key={c.id}>
+                  <TableCell className="font-medium">{c.full_name}</TableCell>
                   <TableCell>
-                    <div className="font-medium">{c.full_name}</div>
-                    {c.email && <div className="text-xs text-muted-foreground">{c.email}</div>}
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono">{c.antenna ?? "—"}</span>
+                      <Button nativeButton={false} variant="outline" size="xs" render={<a />}>
+                        Gestionar
+                      </Button>
+                    </div>
                   </TableCell>
-                  <TableCell className="font-mono">{c.antenna ?? "—"}</TableCell>
                   <TableCell className="min-w-32 max-w-64 whitespace-normal">{c.address ?? "—"}</TableCell>
                   <TableCell>{c.plans ? `${c.plans.name} · ${ars(c.plans.price)}` : "—"}</TableCell>
                   <TableCell>
@@ -148,26 +161,23 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                     <div className="flex items-center gap-2">
                       <StatusBadge paid={c.paid} />
                       {c.last?.status === "pending" && <MarkPaid client={c} invoice={c.last} />}
-                      {c.last?.receipt_path && receiptUrl.get(c.last.receipt_path) && (
-                        <a
-                          href={receiptUrl.get(c.last.receipt_path)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-primary underline-offset-4 hover:underline"
-                        >
-                          Ver PDF
-                        </a>
-                      )}
                     </div>
                   </TableCell>
                   <TableCell className="space-x-1 text-right">
                     <EditPlan client={c} plans={plans ?? []} />
                     <DeleteClient client={c} />
                   </TableCell>
+                  <TableCell>
+                    {c.last?.receipt_path && receiptUrl.get(c.last.receipt_path) ? (
+                      <ReceiptViewer client={c} invoice={c.last} url={receiptUrl.get(c.last.receipt_path)!} />
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
               {!rows.length && (
-                <TableRow><TableCell colSpan={7} className="text-muted-foreground">Sin resultados.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="text-muted-foreground">Sin resultados.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -194,6 +204,28 @@ function FilterSelect({ name, items, defaultValue }: { name: string; items: { va
         {items.map((i) => <SelectItem key={i.value} value={i.value}>{i.label}</SelectItem>)}
       </SelectContent>
     </Select>
+  );
+}
+
+function ReceiptViewer({ client, invoice, url }: { client: Client; invoice: Invoice; url: string }) {
+  return (
+    <Dialog>
+      <DialogTrigger render={<Button variant="outline" size="sm" />}>Ver PDF</DialogTrigger>
+      <DialogContent className="sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>Comprobante · {client.full_name}</DialogTitle>
+          <DialogDescription>
+            {invoice.period.slice(0, 7)} · {ars(invoice.amount)}
+          </DialogDescription>
+        </DialogHeader>
+        <iframe src={url} title={`Comprobante de ${client.full_name}`} className="h-[70vh] w-full rounded-lg bg-white" />
+        <DialogFooter showCloseButton>
+          <Button nativeButton={false} variant="secondary" render={<a href={url} target="_blank" rel="noopener noreferrer" />}>
+            Abrir en otra pestaña
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -267,12 +299,18 @@ function EditPlan({ client, plans }: { client: Client; plans: Plan[] }) {
             <DialogTitle>{client.full_name}</DialogTitle>
             <DialogDescription>Si cambiás el plan, las facturas pendientes se actualizan al nuevo precio.</DialogDescription>
           </DialogHeader>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-lg bg-muted/50 p-3 text-sm">
-            <dt className="text-muted-foreground">Dirección</dt><dd>{client.address ?? "—"}</dd>
-            <dt className="text-muted-foreground">Alta</dt>
-            <dd>{new Date(client.created_at).toLocaleDateString("es-AR", { dateStyle: "short" })}</dd>
-          </dl>
+          <p className="text-xs text-muted-foreground">
+            Alta: {new Date(client.created_at).toLocaleDateString("es-AR", { dateStyle: "short" })}
+          </p>
           <input type="hidden" name="user_id" value={client.id} />
+          <div className="space-y-1.5">
+            <Label htmlFor={`name-${client.id}`}>Nombre y apellido</Label>
+            <Input id={`name-${client.id}`} name="full_name" defaultValue={client.full_name} required />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor={`address-${client.id}`}>Dirección del servicio</Label>
+            <Input id={`address-${client.id}`} name="address" defaultValue={client.address ?? ""} required />
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor={`antenna-${client.id}`}>Número de antena</Label>
             <Input id={`antenna-${client.id}`} name="antenna" defaultValue={client.antenna ?? ""} placeholder="Ej.: A-102" />

@@ -17,7 +17,6 @@ export async function createClient() {
           try {
             list.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
           } catch {
-            // Llamado desde un Server Component: proxy.ts ya refresca la sesión.
           }
         },
       },
@@ -25,7 +24,6 @@ export async function createClient() {
   );
 }
 
-// Salta RLS. Usar solo después de verificar permisos en el servidor.
 export function createAdminClient() {
   return createSbClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SECRET_KEY!, {
     auth: { persistSession: false },
@@ -33,7 +31,7 @@ export function createAdminClient() {
 }
 
 export async function getProfile() {
-  await connection(); // el cliente de auth usa Date.now(): renderizar solo por request
+  await connection();
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");

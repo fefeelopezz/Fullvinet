@@ -15,7 +15,6 @@ export default function LoginPage({ searchParams }: PageProps<"/login">) {
         </CardHeader>
         <CardContent>
           <form action={login} className="space-y-3">
-            {/* Lee la URL (error): va dentro de Suspense para que el resto sea estático */}
             <Suspense>
               <LoginError searchParams={searchParams} />
             </Suspense>
