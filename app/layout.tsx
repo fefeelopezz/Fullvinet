@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { WhatsAppButton } from "@/components/whatsapp-button";
 
 const jakarta = Plus_Jakarta_Sans({
   variable: "--font-sans",
@@ -14,14 +13,14 @@ const geistMono = Geist_Mono({
 });
 
 const description =
-  "Fullvinet, proveedor de internet. Consultá el estado de tu servicio, tu plan y pagá tu factura online con Mercado Pago.";
+  "Panel de administración de clientes, planes y facturas de Fullvinet.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://fullvinet.vercel.app"),
   title: { default: "Fullvinet · Internet", template: "%s · Fullvinet" },
   description,
   applicationName: "Fullvinet",
-  keywords: ["Fullvinet", "internet", "proveedor de internet", "pagar factura de internet", "Mercado Pago"],
+  keywords: ["Fullvinet", "internet", "proveedor de internet"],
   alternates: { canonical: "/login" },
   openGraph: {
     type: "website",
@@ -44,7 +43,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         {children}
-        <WhatsAppButton />
       </body>
     </html>
   );

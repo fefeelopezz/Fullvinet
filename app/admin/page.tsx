@@ -10,17 +10,19 @@ import { StatusBadge } from "@/components/status-badge";
 import { createAdminClient, requireAdmin } from "@/lib/supabase/server";
 import { ars } from "@/lib/utils";
 import { logout } from "../login/actions";
-import { addClient, deleteUser, markPaid, updateClient } from "./actions";
+import { addClient, deleteClient, markPaid, updateClient } from "./actions";
 
+type Invoice = { id: string; status: string; period: string; amount: number; paid_at: string | null; receipt_path: string | null };
 type Client = {
   id: string;
   full_name: string;
-  email: string;
+  email: string | null;
   address: string | null;
   antenna: string | null;
   plan_id: number | null;
+  created_at: string;
   plans: { name: string; price: number } | null;
-  invoices: { id: string; status: string; period: string; amount: number }[];
+  invoices: Invoice[];
 };
 
 // Depende del usuario logueado: puede bloquear la navegación
@@ -31,16 +33,13 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const { q = "", plan = "all", estado = "all", mes = "all", error, ok } = (await searchParams) as Record<string, string>;
   const db = createAdminClient();
 
-  const [{ data: plans }, { data }, { data: authData }] = await Promise.all([
+  const [{ data: plans }, { data }] = await Promise.all([
     db.from("plans").select("id, name, speed_mbps, price").order("price"),
     db.from("profiles")
-      .select("id, full_name, email, address, antenna, plan_id, plans(name, price), invoices(id, status, period, amount)")
+      .select("id, full_name, email, address, antenna, plan_id, created_at, plans(name, price), invoices(id, status, period, amount, paid_at, receipt_path)")
       .eq("role", "user")
       .order("full_name"),
-    // shortcut: una sola página de 1000 usuarios de auth, paginar si se superan
-    db.auth.admin.listUsers({ perPage: 1000 }),
   ]);
-  const authById = new Map((authData?.users ?? []).map((u) => [u.id, u]));
   // shortcut: trae todos los clientes y filtra en memoria; pasar los filtros a SQL si superan unos miles
   const all = (data ?? []) as unknown as Client[];
   // Con mes elegido: la factura de ese mes decide el estado; sin mes, la última y si debe alguna
@@ -56,10 +55,17 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const term = q.trim().toLowerCase();
   const rows = clients.filter(
     (c) =>
-      (!term || [c.full_name, c.email, c.address ?? "", c.antenna ?? ""].some((v) => v.toLowerCase().includes(term))) &&
+      (!term || [c.full_name, c.email ?? "", c.address ?? "", c.antenna ?? ""].some((v) => v.toLowerCase().includes(term))) &&
       (plan === "all" || String(c.plan_id) === plan) &&
       (estado === "all" || (estado === "paid") === c.paid),
   );
+
+  // Links temporales (1 h) a los comprobantes del bucket privado
+  const receiptPaths = rows.flatMap((c) => (c.last?.receipt_path ? [c.last.receipt_path] : []));
+  const { data: signed } = receiptPaths.length
+    ? await db.storage.from("comprobantes").createSignedUrls(receiptPaths, 3600)
+    : { data: [] };
+  const receiptUrl = new Map((signed ?? []).flatMap((s) => (s.path && s.signedUrl ? [[s.path, s.signedUrl] as const] : [])));
 
   const planItems = [{ value: "all", label: "Todos los servicios" }, ...(plans ?? []).map((p) => ({ value: String(p.id), label: p.name }))];
   const months = [...new Set(all.flatMap((c) => c.invoices.map((i) => i.period.slice(0, 7))))].sort().reverse();
@@ -91,13 +97,13 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
       {ok && <p role="status" className="text-sm text-primary">{ok}</p>}
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <Stat title="Usuarios cargados" value={clients.length} />
+        <Stat title="Clientes" value={clients.length} />
         <Stat title="Servicio pagado" value={clients.length - unpaid} />
         <Stat title="Servicio no pagado" value={unpaid} />
       </div>
 
       <form className="flex flex-col gap-2 sm:flex-row">
-        <Input name="q" defaultValue={q} placeholder="Buscar por nombre, antena, dirección o email" aria-label="Buscar cliente" className="sm:max-w-xs" />
+        <Input name="q" defaultValue={q} placeholder="Buscar por nombre, antena o dirección" aria-label="Buscar cliente" className="sm:max-w-xs" />
         <FilterSelect name="plan" items={planItems} defaultValue={plan} />
         <FilterSelect name="mes" items={mesItems} defaultValue={mes} />
         <FilterSelect name="estado" items={estadoItems} defaultValue={estado} />
@@ -123,7 +129,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                 <TableRow key={c.id}>
                   <TableCell>
                     <div className="font-medium">{c.full_name}</div>
-                    <div className="text-xs text-muted-foreground">{c.email}</div>
+                    {c.email && <div className="text-xs text-muted-foreground">{c.email}</div>}
                   </TableCell>
                   <TableCell className="font-mono">{c.antenna ?? "—"}</TableCell>
                   <TableCell className="min-w-32 max-w-64 whitespace-normal">{c.address ?? "—"}</TableCell>
@@ -141,27 +147,27 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <StatusBadge paid={c.paid} />
-                      {c.last?.status === "pending" && (
-                        <form action={markPaid}>
-                          <input type="hidden" name="invoice_id" value={c.last.id} />
-                          <Button type="submit" variant="secondary" size="xs">Marcar pagada</Button>
-                        </form>
+                      {c.last?.status === "pending" && <MarkPaid client={c} invoice={c.last} />}
+                      {c.last?.receipt_path && receiptUrl.get(c.last.receipt_path) && (
+                        <a
+                          href={receiptUrl.get(c.last.receipt_path)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-primary underline-offset-4 hover:underline"
+                        >
+                          Ver PDF
+                        </a>
                       )}
                     </div>
                   </TableCell>
                   <TableCell className="space-x-1 text-right">
-                    <EditPlan
-                      client={c}
-                      plans={plans ?? []}
-                      createdAt={authById.get(c.id)?.created_at}
-                      lastSignIn={authById.get(c.id)?.last_sign_in_at}
-                    />
-                    <DeleteUser client={c} />
+                    <EditPlan client={c} plans={plans ?? []} />
+                    <DeleteClient client={c} />
                   </TableCell>
                 </TableRow>
               ))}
               {!rows.length && (
-                <TableRow><TableCell colSpan={6} className="text-muted-foreground">Sin resultados.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-muted-foreground">Sin resultados.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -191,13 +197,37 @@ function FilterSelect({ name, items, defaultValue }: { name: string; items: { va
   );
 }
 
+function MarkPaid({ client, invoice }: { client: Client; invoice: Invoice }) {
+  return (
+    <Dialog>
+      <DialogTrigger render={<Button variant="secondary" size="xs" />}>Marcar pagada</DialogTrigger>
+      <DialogContent>
+        <form action={markPaid} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>Marcar como pagada</DialogTitle>
+            <DialogDescription>
+              {client.full_name} · {invoice.period.slice(0, 7)} · {ars(invoice.amount)}
+            </DialogDescription>
+          </DialogHeader>
+          <input type="hidden" name="invoice_id" value={invoice.id} />
+          <div className="space-y-1.5">
+            <Label htmlFor={`receipt-${invoice.id}`}>Comprobante en PDF (opcional, hasta 4 MB)</Label>
+            <Input id={`receipt-${invoice.id}`} name="receipt" type="file" accept="application/pdf" />
+          </div>
+          <DialogFooter>
+            <Button type="submit">Confirmar pago</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AddClient({ plans }: { plans: Plan[] }) {
   const fields = [
     { name: "full_name", label: "Nombre completo" },
-    { name: "email", label: "Email", type: "email" },
     { name: "address", label: "Dirección del servicio" },
     { name: "antenna", label: "Número de antena (opcional)", required: false },
-    { name: "password", label: "Contraseña inicial", type: "password", minLength: 8 },
   ];
   return (
     <Dialog>
@@ -206,7 +236,7 @@ function AddClient({ plans }: { plans: Plan[] }) {
         <form action={addClient} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Agregar cliente</DialogTitle>
-            <DialogDescription>Se crea la cuenta con el email confirmado y la factura del mes.</DialogDescription>
+            <DialogDescription>Se crea el cliente con la factura del mes en curso.</DialogDescription>
           </DialogHeader>
           {fields.map(({ name, label, ...props }) => (
             <div key={name} className="space-y-1.5">
@@ -227,8 +257,7 @@ function AddClient({ plans }: { plans: Plan[] }) {
   );
 }
 
-function EditPlan({ client, plans, createdAt, lastSignIn }: { client: Client; plans: Plan[]; createdAt?: string; lastSignIn?: string }) {
-  const fecha = (d?: string) => (d ? new Date(d).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" }) : "Nunca");
+function EditPlan({ client, plans }: { client: Client; plans: Plan[] }) {
   return (
     <Dialog>
       <DialogTrigger render={<Button variant="outline" size="sm" />}>Editar</DialogTrigger>
@@ -239,10 +268,9 @@ function EditPlan({ client, plans, createdAt, lastSignIn }: { client: Client; pl
             <DialogDescription>Si cambiás el plan, las facturas pendientes se actualizan al nuevo precio.</DialogDescription>
           </DialogHeader>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-lg bg-muted/50 p-3 text-sm">
-            <dt className="text-muted-foreground">Email</dt><dd className="break-all">{client.email}</dd>
             <dt className="text-muted-foreground">Dirección</dt><dd>{client.address ?? "—"}</dd>
-            <dt className="text-muted-foreground">Alta</dt><dd>{fecha(createdAt)}</dd>
-            <dt className="text-muted-foreground">Último ingreso</dt><dd>{fecha(lastSignIn)}</dd>
+            <dt className="text-muted-foreground">Alta</dt>
+            <dd>{new Date(client.created_at).toLocaleDateString("es-AR", { dateStyle: "short" })}</dd>
           </dl>
           <input type="hidden" name="user_id" value={client.id} />
           <div className="space-y-1.5">
@@ -253,11 +281,6 @@ function EditPlan({ client, plans, createdAt, lastSignIn }: { client: Client; pl
             <Label>Plan</Label>
             <PlanSelect plans={plans} defaultValue={client.plan_id} />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor={`password-${client.id}`}>Nueva contraseña</Label>
-            <Input id={`password-${client.id}`} name="password" type="password" minLength={8} autoComplete="new-password" placeholder="Dejar vacío para no cambiarla" />
-            <p className="text-xs text-muted-foreground">Por seguridad las contraseñas no se pueden ver, solo reemplazar.</p>
-          </div>
           <DialogFooter>
             <DialogClose render={<Button type="submit" />}>Guardar</DialogClose>
           </DialogFooter>
@@ -267,15 +290,15 @@ function EditPlan({ client, plans, createdAt, lastSignIn }: { client: Client; pl
   );
 }
 
-function DeleteUser({ client }: { client: Client }) {
+function DeleteClient({ client }: { client: Client }) {
   return (
     <Dialog>
       <DialogTrigger render={<Button variant="ghost" size="sm" className="text-destructive" />}>Dar de baja</DialogTrigger>
       <DialogContent>
-        <form action={deleteUser} className="space-y-4">
+        <form action={deleteClient} className="space-y-4">
           <DialogHeader>
             <DialogTitle>¿Dar de baja a {client.full_name}?</DialogTitle>
-            <DialogDescription>Se elimina el usuario y todas sus facturas. No se puede deshacer.</DialogDescription>
+            <DialogDescription>Se elimina el cliente, sus facturas y sus comprobantes. No se puede deshacer.</DialogDescription>
           </DialogHeader>
           <input type="hidden" name="user_id" value={client.id} />
           <DialogFooter showCloseButton>

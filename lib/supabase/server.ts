@@ -32,17 +32,6 @@ export function createAdminClient() {
   });
 }
 
-// Planes son públicos y casi no cambian: cacheados, sin cookies
-export async function getPlans() {
-  "use cache";
-  const { data } = await createSbClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-    { auth: { persistSession: false } },
-  ).from("plans").select("id, name, speed_mbps, price").order("price");
-  return data ?? [];
-}
-
 export async function getProfile() {
   await connection(); // el cliente de auth usa Date.now(): renderizar solo por request
   const supabase = await createClient();
@@ -59,6 +48,6 @@ export async function getProfile() {
 
 export async function requireAdmin() {
   const ctx = await getProfile();
-  if (ctx.profile.role !== "admin") redirect("/cuenta");
+  if (ctx.profile.role !== "admin") redirect(`/login?error=${encodeURIComponent("Solo el administrador puede ingresar")}`);
   return ctx;
 }
