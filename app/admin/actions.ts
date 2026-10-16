@@ -10,13 +10,21 @@ const back = (key: "ok" | "error", msg: string) => redirect(`/admin?${key}=${enc
 const currentPeriod = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }).slice(0, 7) + "-01";
 
+const METHODS = ["transferencia", "efectivo", "sin_cargo"];
+const methodOf = (formData: FormData) => {
+  const m = String(formData.get("payment_method") ?? "");
+  return METHODS.includes(m) ? m : null;
+};
+const antennaOf = (formData: FormData) =>
+  String(formData.get("antenna") ?? "").toUpperCase().replace(/[\s-]/g, "") || null;
+
 export async function addClient(formData: FormData) {
   await requireAdmin();
   const full_name = String(formData.get("full_name") ?? "").trim();
-  const address = String(formData.get("address") ?? "").trim();
-  const antenna = String(formData.get("antenna") ?? "").trim() || null;
+  const antenna = antennaOf(formData);
+  const payment_method = methodOf(formData);
   const planId = Number(formData.get("plan_id"));
-  if (!full_name || !address || !planId) back("error", "Completá nombre, dirección y plan");
+  if (!full_name || !planId) back("error", "Completá nombre y plan");
 
   const db = createAdminClient();
   const { data: plan } = await db.from("plans").select("id, price").eq("id", planId).single();
@@ -24,14 +32,16 @@ export async function addClient(formData: FormData) {
 
   const { data: client, error } = await db
     .from("profiles")
-    .insert({ full_name, address, antenna, plan_id: plan!.id })
+    .insert({ full_name, antenna, payment_method, plan_id: plan!.id })
     .select("id")
     .single();
   if (error) back("error", error.message);
-  const { error: invErr } = await db
-    .from("invoices")
-    .insert({ user_id: client!.id, period: currentPeriod(), amount: plan!.price });
-  if (invErr) back("error", invErr.message);
+  if (payment_method !== "sin_cargo") {
+    const { error: invErr } = await db
+      .from("invoices")
+      .insert({ user_id: client!.id, period: currentPeriod(), amount: plan!.price });
+    if (invErr) back("error", invErr.message);
+  }
 
   revalidatePath("/admin");
   back("ok", `Se agregó a ${full_name}`);
@@ -91,16 +101,17 @@ export async function updateClient(formData: FormData) {
   if (!plan) back("error", "Plan inválido");
 
   const full_name = String(formData.get("full_name") ?? "").trim();
-  const address = String(formData.get("address") ?? "").trim();
-  if (!full_name || !address) back("error", "Completá nombre y dirección");
-  const antenna = String(formData.get("antenna") ?? "").trim() || null;
-  const { error } = await db.from("profiles").update({ full_name, address, plan_id: plan!.id, antenna }).eq("id", id);
+  if (!full_name) back("error", "Completá el nombre");
+  const { error } = await db
+    .from("profiles")
+    .update({ full_name, plan_id: plan!.id, antenna: antennaOf(formData), payment_method: methodOf(formData) })
+    .eq("id", id);
   if (error) back("error", error.message);
   const { error: invErr } = await db
     .from("invoices")
     .update({ amount: plan!.price })
     .eq("user_id", id)
-    .eq("status", "pending");
+    .or("status.eq.pending,amount.is.null");
   if (invErr) back("error", invErr.message);
   revalidatePath("/admin");
 }

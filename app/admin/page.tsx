@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -8,17 +8,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { PlanSelect, type Plan } from "@/components/plan-select";
 import { StatusBadge } from "@/components/status-badge";
 import { createAdminClient, requireAdmin } from "@/lib/supabase/server";
+import { Badge } from "@/components/ui/badge";
 import { ars } from "@/lib/utils";
 import { logout } from "../login/actions";
 import { addClient, deleteClient, markPaid, updateClient } from "./actions";
 
-type Invoice = { id: string; status: string; period: string; amount: number; paid_at: string | null; receipt_path: string | null };
+type Invoice = { id: string; status: string; period: string; amount: number | null; paid_at: string | null; receipt_path: string | null };
 type Client = {
   id: string;
   full_name: string;
   email: string | null;
-  address: string | null;
   antenna: string | null;
+  payment_method: "transferencia" | "efectivo" | "sin_cargo" | null;
   plan_id: number | null;
   created_at: string;
   plans: { name: string; price: number } | null;
@@ -26,6 +27,17 @@ type Client = {
 };
 
 export const instant = false;
+
+const METHOD_LABEL = { transferencia: "Transferencia", efectivo: "Efectivo", sin_cargo: "Sin cargo" } as const;
+
+const monto = (amount: number | null) => (amount == null ? "Sin plan" : ars(amount));
+
+function antennaUrl(antenna: string | null) {
+  const m = antenna?.toUpperCase().replace(/[\s-]/g, "").match(/^([AB]?)(\d+)$/);
+  if (!m) return null;
+  const subnet = m[1] === "A" ? 21 : m[1] === "B" ? 24 : 20;
+  return `http://192.168.${subnet}.${Number(m[2])}`;
+}
 
 export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   await requireAdmin();
@@ -35,7 +47,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const [{ data: plans }, { data }] = await Promise.all([
     db.from("plans").select("id, name, speed_mbps, price").order("price"),
     db.from("profiles")
-      .select("id, full_name, email, address, antenna, plan_id, created_at, plans(name, price), invoices(id, status, period, amount, paid_at, receipt_path)")
+      .select("id, full_name, email, antenna, payment_method, plan_id, created_at, plans(name, price), invoices(id, status, period, amount, paid_at, receipt_path)")
       .eq("role", "user")
       .order("full_name"),
   ]);
@@ -45,16 +57,17 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     const last = mes === "all" ? sorted[0] : sorted.find((i) => i.period.startsWith(mes));
     if (mes !== "all" && !last) return [];
     const paid = mes === "all" ? c.invoices.every((i) => i.status === "paid") : last?.status === "paid";
-    return [{ ...c, last, paid }];
+    return [{ ...c, last, paid, free: c.payment_method === "sin_cargo" }];
   });
-  const unpaid = clients.filter((c) => !c.paid).length;
+  const billable = clients.filter((c) => !c.free);
+  const unpaid = billable.filter((c) => !c.paid).length;
 
   const term = q.trim().toLowerCase();
   const rows = clients.filter(
     (c) =>
-      (!term || [c.full_name, c.email ?? "", c.address ?? "", c.antenna ?? ""].some((v) => v.toLowerCase().includes(term))) &&
+      (!term || [c.full_name, c.antenna ?? ""].some((v) => v.toLowerCase().includes(term))) &&
       (plan === "all" || String(c.plan_id) === plan) &&
-      (estado === "all" || (estado === "paid") === c.paid),
+      (estado === "all" || (!c.free && (estado === "paid") === c.paid)),
   );
 
   const receiptPaths = rows.flatMap((c) => (c.last?.receipt_path ? [c.last.receipt_path] : []));
@@ -98,12 +111,12 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat title="Clientes" value={clients.length} />
-        <Stat title="Servicio pagado" value={clients.length - unpaid} />
+        <Stat title="Servicio pagado" value={billable.length - unpaid} />
         <Stat title="Servicio no pagado" value={unpaid} />
       </div>
 
       <form className="flex flex-col gap-2 sm:flex-row">
-        <Input name="q" defaultValue={q} placeholder="Buscar por nombre, antena o dirección" aria-label="Buscar cliente" className="sm:max-w-xs" />
+        <Input name="q" defaultValue={q} placeholder="Buscar por nombre o antena" aria-label="Buscar cliente" className="sm:max-w-xs" />
         <FilterSelect name="plan" items={planItems} defaultValue={plan} />
         <FilterSelect name="mes" items={mesItems} defaultValue={mes} />
         <FilterSelect name="estado" items={estadoItems} defaultValue={estado} />
@@ -125,7 +138,6 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
               <TableRow>
                 <TableHead>Cliente</TableHead>
                 <TableHead>Antena</TableHead>
-                <TableHead>Dirección</TableHead>
                 <TableHead>Plan</TableHead>
                 <TableHead>{mes === "all" ? "Última factura" : "Factura del mes"}</TableHead>
                 <TableHead>Pago</TableHead>
@@ -140,17 +152,28 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <span className="font-mono">{c.antenna ?? "—"}</span>
-                      <Button nativeButton={false} variant="outline" size="xs" render={<a />}>
-                        Gestionar
-                      </Button>
+                      {antennaUrl(c.antenna) ? (
+                        <a
+                          href={antennaUrl(c.antenna)!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={antennaUrl(c.antenna)!}
+                          className={buttonVariants({ variant: "outline", size: "xs" })}
+                        >
+                          Gestionar
+                        </a>
+                      ) : (
+                        <Button variant="outline" size="xs" disabled title="Asigná una antena válida (ej.: 12, A12 o B3)">
+                          Gestionar
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
-                  <TableCell className="min-w-32 max-w-64 whitespace-normal">{c.address ?? "—"}</TableCell>
                   <TableCell>{c.plans ? `${c.plans.name} · ${ars(c.plans.price)}` : "—"}</TableCell>
                   <TableCell>
                     {c.last ? (
                       <>
-                        <div>{ars(c.last.amount)}</div>
+                        <div>{monto(c.last.amount)}</div>
                         <div className="text-xs text-muted-foreground">
                           {c.last.period.slice(0, 7)} · {c.last.status === "paid" ? "pagada" : "pendiente"}
                         </div>
@@ -158,10 +181,17 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                     ) : "—"}
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-2">
-                      <StatusBadge paid={c.paid} />
-                      {c.last?.status === "pending" && <MarkPaid client={c} invoice={c.last} />}
-                    </div>
+                    {c.free ? (
+                      <Badge variant="outline">Sin cargo</Badge>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <StatusBadge paid={c.paid} />
+                        {c.last?.status === "pending" && <MarkPaid client={c} invoice={c.last} />}
+                      </div>
+                    )}
+                    {c.payment_method && !c.free && (
+                      <div className="mt-1 text-xs text-muted-foreground">{METHOD_LABEL[c.payment_method]}</div>
+                    )}
                   </TableCell>
                   <TableCell className="space-x-1 text-right">
                     <EditPlan client={c} plans={plans ?? []} />
@@ -215,7 +245,7 @@ function ReceiptViewer({ client, invoice, url }: { client: Client; invoice: Invo
         <DialogHeader>
           <DialogTitle>Comprobante · {client.full_name}</DialogTitle>
           <DialogDescription>
-            {invoice.period.slice(0, 7)} · {ars(invoice.amount)}
+            {invoice.period.slice(0, 7)} · {monto(invoice.amount)}
           </DialogDescription>
         </DialogHeader>
         <iframe src={url} title={`Comprobante de ${client.full_name}`} className="h-[70vh] w-full rounded-lg bg-white" />
@@ -238,7 +268,7 @@ function MarkPaid({ client, invoice }: { client: Client; invoice: Invoice }) {
           <DialogHeader>
             <DialogTitle>Marcar como pagada</DialogTitle>
             <DialogDescription>
-              {client.full_name} · {invoice.period.slice(0, 7)} · {ars(invoice.amount)}
+              {client.full_name} · {invoice.period.slice(0, 7)} · {monto(invoice.amount)}
             </DialogDescription>
           </DialogHeader>
           <input type="hidden" name="invoice_id" value={invoice.id} />
@@ -255,11 +285,25 @@ function MarkPaid({ client, invoice }: { client: Client; invoice: Invoice }) {
   );
 }
 
+function MethodSelect({ defaultValue }: { defaultValue?: Client["payment_method"] }) {
+  const items = Object.entries(METHOD_LABEL).map(([value, label]) => ({ value, label }));
+  return (
+    <div className="space-y-1.5">
+      <Label>Medio de pago</Label>
+      <Select name="payment_method" items={items} defaultValue={defaultValue ?? undefined}>
+        <SelectTrigger className="w-full"><SelectValue placeholder="Elegí cómo paga" /></SelectTrigger>
+        <SelectContent>
+          {items.map((i) => <SelectItem key={i.value} value={i.value}>{i.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 function AddClient({ plans }: { plans: Plan[] }) {
   const fields = [
     { name: "full_name", label: "Nombre completo" },
-    { name: "address", label: "Dirección del servicio" },
-    { name: "antenna", label: "Número de antena (opcional)", required: false },
+    { name: "antenna", label: "Número de antena (opcional)", required: false, placeholder: "Ej.: 12, A12 o B3" },
   ];
   return (
     <Dialog>
@@ -280,6 +324,7 @@ function AddClient({ plans }: { plans: Plan[] }) {
             <Label>Plan</Label>
             <PlanSelect plans={plans} />
           </div>
+          <MethodSelect />
           <DialogFooter>
             <Button type="submit">Agregar</Button>
           </DialogFooter>
@@ -308,17 +353,14 @@ function EditPlan({ client, plans }: { client: Client; plans: Plan[] }) {
             <Input id={`name-${client.id}`} name="full_name" defaultValue={client.full_name} required />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor={`address-${client.id}`}>Dirección del servicio</Label>
-            <Input id={`address-${client.id}`} name="address" defaultValue={client.address ?? ""} required />
-          </div>
-          <div className="space-y-1.5">
             <Label htmlFor={`antenna-${client.id}`}>Número de antena</Label>
-            <Input id={`antenna-${client.id}`} name="antenna" defaultValue={client.antenna ?? ""} placeholder="Ej.: A-102" />
+            <Input id={`antenna-${client.id}`} name="antenna" defaultValue={client.antenna ?? ""} placeholder="Ej.: 12, A12 o B3" />
           </div>
           <div className="space-y-1.5">
             <Label>Plan</Label>
             <PlanSelect plans={plans} defaultValue={client.plan_id} />
           </div>
+          <MethodSelect defaultValue={client.payment_method} />
           <DialogFooter>
             <DialogClose render={<Button type="submit" />}>Guardar</DialogClose>
           </DialogFooter>
