@@ -15,6 +15,14 @@ const methodOf = (formData: FormData) => {
   const m = String(formData.get("payment_method") ?? "");
   return METHODS.includes(m) ? m : null;
 };
+const receiptType = (b: Uint8Array) => {
+  const head = String.fromCharCode(...b.slice(0, 12));
+  if (head.startsWith("%PDF")) return { ext: "pdf", mime: "application/pdf" };
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { ext: "jpg", mime: "image/jpeg" };
+  if (head.startsWith("\x89PNG")) return { ext: "png", mime: "image/png" };
+  if (head.startsWith("RIFF") && head.slice(8, 12) === "WEBP") return { ext: "webp", mime: "image/webp" };
+  return null;
+};
 const antennaOf = (formData: FormData) =>
   String(formData.get("antenna") ?? "").toUpperCase().replace(/[\s-]/g, "") || null;
 
@@ -60,11 +68,12 @@ export async function markPaid(formData: FormData) {
   if (file instanceof File && file.size > 0) {
     if (file.size > MAX_PDF) back("error", "El comprobante supera los 4 MB");
     const bytes = new Uint8Array(await file.arrayBuffer());
-    if (String.fromCharCode(...bytes.slice(0, 4)) !== "%PDF") back("error", "El comprobante tiene que ser un PDF");
-    receipt_path = `${invoiceId}.pdf`;
+    const type = receiptType(bytes);
+    if (!type) back("error", "El comprobante tiene que ser un PDF o una foto (JPG, PNG o WEBP)");
+    receipt_path = `${invoiceId}.${type!.ext}`;
     const { error } = await db.storage
       .from("comprobantes")
-      .upload(receipt_path, bytes, { contentType: "application/pdf", upsert: true });
+      .upload(receipt_path, bytes, { contentType: type!.mime, upsert: true });
     if (error) back("error", `No se pudo subir el comprobante: ${error.message}`);
   }
 
@@ -157,6 +166,16 @@ export async function undoPayment(formData: FormData) {
 }
 
 const IP = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+export async function addZone(formData: FormData) {
+  await requireAdmin();
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) back("error", "Completá el nombre de la zona");
+  const { error } = await createAdminClient().from("zones").insert({ name });
+  if (error) back("error", error.code === "23505" ? `La zona ${name} ya existe` : error.message);
+  revalidatePath("/admin");
+  back("ok", `Zona ${name} agregada`);
+}
 
 export async function addZoneIp(formData: FormData) {
   await requireAdmin();

@@ -15,6 +15,7 @@ import { ars } from "@/lib/utils";
 import { logout } from "../login/actions";
 import {
   addClient,
+  addZone,
   addZoneIp,
   deleteClient,
   deleteZoneIp,
@@ -88,6 +89,9 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   });
   const billable = clients.filter((c) => !c.free);
   const unpaid = billable.filter((c) => !c.paid).length;
+  const moneyMonth = mes === "all" ? new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }).slice(0, 7) : mes;
+  const inScope = billable.flatMap((c) => c.invoices.filter((i) => i.period.startsWith(moneyMonth)));
+  const total = (status: string) => inScope.reduce((sum, i) => sum + (i.status === status ? Number(i.amount ?? 0) : 0), 0);
 
   const term = q.trim().toLowerCase();
   const rows = clients.filter(
@@ -142,8 +146,8 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat title="Clientes" value={clients.length} />
-        <Stat title="Servicio pagado" value={billable.length - unpaid} />
-        <Stat title="Servicio no pagado" value={unpaid} />
+        <Stat title="Servicio pagado" value={billable.length - unpaid} money={total("paid")} />
+        <Stat title="Servicio no pagado" value={unpaid} money={total("pending")} />
       </div>
 
       <form className="flex flex-col gap-2 sm:flex-row">
@@ -267,11 +271,14 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   );
 }
 
-function Stat({ title, value }: { title: string; value: number }) {
+function Stat({ title, value, money }: { title: string; value: number; money?: number }) {
   return (
     <Card size="sm">
       <CardHeader><CardDescription>{title}</CardDescription></CardHeader>
-      <CardContent className="text-2xl font-semibold">{value}</CardContent>
+      <CardContent className="flex items-baseline justify-between gap-2">
+        <span className="text-2xl font-semibold">{value}</span>
+        {money !== undefined && <span className="text-lg font-medium text-muted-foreground tabular-nums">{ars(money)}</span>}
+      </CardContent>
     </Card>
   );
 }
@@ -288,9 +295,10 @@ function FilterSelect({ name, items, defaultValue }: { name: string; items: { va
 }
 
 function ReceiptViewer({ client, invoice, url }: { client: Client; invoice: Invoice; url: string }) {
+  const isPdf = invoice.receipt_path?.endsWith(".pdf");
   return (
     <Dialog>
-      <DialogTrigger render={<Button variant="outline" size="sm" />}>Ver PDF</DialogTrigger>
+      <DialogTrigger render={<Button variant="outline" size="sm" />}>{isPdf ? "Ver PDF" : "Ver foto"}</DialogTrigger>
       <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Comprobante · {client.full_name}</DialogTitle>
@@ -298,7 +306,11 @@ function ReceiptViewer({ client, invoice, url }: { client: Client; invoice: Invo
             {invoice.period.slice(0, 7)} · {monto(invoice.amount)}
           </DialogDescription>
         </DialogHeader>
-        <iframe src={url} title={`Comprobante de ${client.full_name}`} className="h-[70vh] w-full rounded-lg bg-white" />
+        {isPdf ? (
+          <iframe src={url} title={`Comprobante de ${client.full_name}`} className="h-[70vh] w-full rounded-lg bg-white" />
+        ) : (
+          <img src={url} alt={`Comprobante de ${client.full_name}`} className="mx-auto max-h-[70vh] w-auto rounded-lg object-contain" />
+        )}
         <DialogFooter showCloseButton>
           <Button nativeButton={false} variant="secondary" render={<a href={url} target="_blank" rel="noopener noreferrer" />}>
             Abrir en otra pestaña
@@ -323,8 +335,8 @@ function MarkPaid({ client, invoice }: { client: Client; invoice: Invoice }) {
           </DialogHeader>
           <input type="hidden" name="invoice_id" value={invoice.id} />
           <div className="space-y-1.5">
-            <Label htmlFor={`receipt-${invoice.id}`}>Comprobante en PDF (opcional, hasta 4 MB)</Label>
-            <Input id={`receipt-${invoice.id}`} name="receipt" type="file" accept="application/pdf" />
+            <Label htmlFor={`receipt-${invoice.id}`}>Comprobante en PDF o foto (opcional, hasta 4 MB)</Label>
+            <Input id={`receipt-${invoice.id}`} name="receipt" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" />
           </div>
           <DialogFooter>
             <Button type="submit">Confirmar pago</Button>
@@ -493,7 +505,7 @@ function ZoneIpList({ zone, kind, title }: { zone: Zone; kind: "panel" | "enlace
               <form action={updateZoneIp} className="flex flex-1 items-center gap-2">
                 <input type="hidden" name="id" value={p.id} />
                 <Input name="ip" defaultValue={p.ip} aria-label={`IP ${what}`} className="font-mono" required />
-                <Input name="label" defaultValue={p.label ?? ""} placeholder="Nombre (opcional)" aria-label="Nombre" />
+                {kind === "panel" && <Input name="label" defaultValue={p.label ?? ""} placeholder="Nombre (opcional)" aria-label="Nombre" />}
                 <Button type="submit" variant="secondary" size="sm">Guardar</Button>
               </form>
               <IpLink ip={p.ip}>abrir</IpLink>
@@ -513,7 +525,7 @@ function ZoneIpList({ zone, kind, title }: { zone: Zone; kind: "panel" | "enlace
         <input type="hidden" name="zone_id" value={zone.id} />
         <input type="hidden" name="kind" value={kind} />
         <Input name="ip" placeholder={`IP ${what} nueva`} aria-label={`IP ${what} para ${zone.name}`} className="font-mono" required />
-        <Input name="label" placeholder="Nombre (opcional)" aria-label="Nombre" />
+        {kind === "panel" && <Input name="label" placeholder="Nombre (opcional)" aria-label="Nombre" />}
         <Button type="submit">Agregar</Button>
       </form>
     </section>
@@ -529,8 +541,12 @@ function ZonesPanel({ zones }: { zones: Zone[] }) {
           <DialogTitle>Zonas</DialogTitle>
           <DialogDescription>IP de enlace y paneles de cada zona. Tocá una IP para abrir el equipo.</DialogDescription>
         </DialogHeader>
+        <form key={zones.length} action={addZone} className="flex gap-2">
+          <Input name="name" placeholder="Nombre de la zona nueva" aria-label="Nombre de la zona nueva" required />
+          <Button type="submit" variant="secondary">Agregar zona</Button>
+        </form>
         <ZonePicker
-          items={zones.map((z) => ({ value: String(z.id), label: `${z.name} · ${z.zone_ips.length} IPs` }))}
+          items={zones.map((z) => ({ value: String(z.id), label: z.name }))}
           panels={Object.fromEntries(zones.map((z) => [String(z.id), (
             <div key={z.id} className="max-h-[55vh] space-y-4 overflow-y-auto pr-1">
               <ZoneIpList zone={z} kind="enlace" title="IPs de enlace" />
