@@ -104,7 +104,13 @@ export async function updateClient(formData: FormData) {
   if (!full_name) back("error", "Completá el nombre");
   const { error } = await db
     .from("profiles")
-    .update({ full_name, plan_id: plan!.id, antenna: antennaOf(formData), payment_method: methodOf(formData) })
+    .update({
+      full_name,
+      plan_id: plan!.id,
+      antenna: antennaOf(formData),
+      payment_method: methodOf(formData),
+      zone_id: Number(formData.get("zone_id")) || null,
+    })
     .eq("id", id);
   if (error) back("error", error.message);
   const { error: invErr } = await db
@@ -113,5 +119,93 @@ export async function updateClient(formData: FormData) {
     .eq("user_id", id)
     .or("status.eq.pending,amount.is.null");
   if (invErr) back("error", invErr.message);
+  revalidatePath("/admin");
+}
+
+export async function updatePlanPrices(formData: FormData) {
+  await requireAdmin();
+  const db = createAdminClient();
+  const { data: plans } = await db.from("plans").select("id, price");
+  for (const p of plans ?? []) {
+    const raw = formData.get(`price_${p.id}`);
+    if (raw === null) continue;
+    const price = Number(String(raw).replace(/\D/g, ""));
+    if (!Number.isFinite(price) || price < 0) back("error", "Precio inválido");
+    if (price === Number(p.price)) continue;
+    const { error } = await db.from("plans").update({ price }).eq("id", p.id);
+    if (error) back("error", error.message);
+  }
+  revalidatePath("/admin");
+  back("ok", "Precios actualizados");
+}
+
+export async function undoPayment(formData: FormData) {
+  await requireAdmin();
+  const invoiceId = String(formData.get("invoice_id"));
+  const db = createAdminClient();
+  const { data: inv } = await db.from("invoices").select("status, receipt_path").eq("id", invoiceId).single();
+  if (!inv || inv.status !== "paid") back("error", "La factura no está pagada");
+  if (inv!.receipt_path) await db.storage.from("comprobantes").remove([inv!.receipt_path]);
+  const { error } = await db
+    .from("invoices")
+    .update({ status: "pending", paid_at: null, receipt_path: null })
+    .eq("id", invoiceId)
+    .eq("status", "paid");
+  if (error) back("error", error.message);
+  revalidatePath("/admin");
+  back("ok", "Pago deshecho: la factura volvió a pendiente");
+}
+
+const IP = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+export async function addZoneIp(formData: FormData) {
+  await requireAdmin();
+  const zone_id = Number(formData.get("zone_id"));
+  const ip = String(formData.get("ip") ?? "").trim();
+  const label = String(formData.get("label") ?? "").trim() || null;
+  const kind = formData.get("kind") === "enlace" ? "enlace" : "panel";
+  if (!zone_id || !IP.test(ip)) back("error", "Ingresá una IP válida (ej.: 192.168.20.1)");
+  const { error } = await createAdminClient().from("zone_ips").insert({ zone_id, ip, label, kind });
+  if (error) back("error", error.message);
+  revalidatePath("/admin");
+  back("ok", `IP ${ip} agregada`);
+}
+
+export async function setFree(formData: FormData) {
+  await requireAdmin();
+  const id = String(formData.get("user_id"));
+  const free = formData.get("free") === "1";
+  const db = createAdminClient();
+  const { data: client } = await db.from("profiles").select("full_name, plans(price)").eq("id", id).single();
+  if (!client) back("error", "Cliente inexistente");
+
+  const { error } = await db.from("profiles").update({ payment_method: free ? "sin_cargo" : null }).eq("id", id);
+  if (error) back("error", error.message);
+  const plan = client!.plans as unknown as { price: number } | null;
+  if (!free && plan) {
+    const { error: invErr } = await db
+      .from("invoices")
+      .upsert({ user_id: id, period: currentPeriod(), amount: plan.price }, { onConflict: "user_id,period", ignoreDuplicates: true });
+    if (invErr) back("error", invErr.message);
+  }
+  revalidatePath("/admin");
+  back("ok", `${client!.full_name} quedó ${free ? "sin cargo" : "con cargo"}`);
+}
+
+export async function updateZoneIp(formData: FormData) {
+  await requireAdmin();
+  const ip = String(formData.get("ip") ?? "").trim();
+  const label = String(formData.get("label") ?? "").trim() || null;
+  if (!IP.test(ip)) back("error", "Ingresá una IP válida (ej.: 192.168.20.1)");
+  const { error } = await createAdminClient().from("zone_ips").update({ ip, label }).eq("id", Number(formData.get("id")));
+  if (error) back("error", error.message);
+  revalidatePath("/admin");
+  back("ok", `IP ${ip} actualizada`);
+}
+
+export async function deleteZoneIp(formData: FormData) {
+  await requireAdmin();
+  const { error } = await createAdminClient().from("zone_ips").delete().eq("id", Number(formData.get("id")));
+  if (error) back("error", error.message);
   revalidatePath("/admin");
 }
