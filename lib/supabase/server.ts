@@ -44,6 +44,10 @@ export async function getProfile() {
   return { supabase, profile };
 }
 
+export async function logAction(actor: { id: string; email: string | null }, action: string, detail?: string) {
+  await createAdminClient().from("audit_log").insert({ actor_id: actor.id, actor_email: actor.email, action, detail: detail ?? null });
+}
+
 export async function requireAdmin() {
   const ctx = await getProfile();
   if (ctx.profile.role !== "admin") redirect(`/login?error=${encodeURIComponent("Solo el administrador puede ingresar")}`);

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, logAction } from "@/lib/supabase/server";
 
 const back = (msg: string) => redirect(`/login?error=${encodeURIComponent(msg)}`);
 
@@ -19,12 +19,15 @@ export async function login(formData: FormData) {
     await supabase.auth.signOut();
     back("Solo el administrador puede ingresar");
   }
+  await logAction({ id: data.user!.id, email: data.user!.email ?? null }, "Inició sesión");
   revalidatePath("/", "layout");
   redirect("/admin");
 }
 
 export async function logout() {
   const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (user) await logAction({ id: user.id, email: user.email ?? null }, "Cerró sesión");
   await supabase.auth.signOut();
   revalidatePath("/", "layout");
   redirect("/login");

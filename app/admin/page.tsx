@@ -29,6 +29,7 @@ import {
 
 type Zone = { id: number; name: string; zone_ips: { id: number; ip: string; label: string | null; kind: "panel" | "enlace" }[] };
 
+type AuditEntry = { id: number; created_at: string; actor_email: string | null; action: string; detail: string | null };
 type Invoice = { id: string; status: string; period: string; amount: number | null; paid_at: string | null; receipt_path: string | null };
 type Client = {
   id: string;
@@ -69,13 +70,14 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const sortHref = `?${new URLSearchParams({ q, plan, mes, estado, ...(byAntenna ? {} : { orden: "antena" }) })}`;
   const db = createAdminClient();
 
-  const [{ data: plans }, { data }, { data: zoneData }] = await Promise.all([
+  const [{ data: plans }, { data }, { data: zoneData }, { data: history }] = await Promise.all([
     db.from("plans").select("id, name, speed_mbps, price").order("speed_mbps"),
     db.from("profiles")
       .select("id, full_name, email, antenna, payment_method, plan_id, zone_id, created_at, plans(name, price), invoices(id, status, period, amount, paid_at, receipt_path)")
       .eq("role", "user")
       .order("full_name"),
     db.from("zones").select("id, name, zone_ips(id, ip, label, kind)").order("name"),
+    db.from("audit_log").select("id, created_at, actor_email, action, detail").order("created_at", { ascending: false }).limit(300),
   ]);
   const zones = (zoneData ?? []) as Zone[];
   const zoneName = new Map(zones.map((z) => [z.id, z.name]));
@@ -134,6 +136,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Panel de administración</h1>
         <div className="flex flex-wrap gap-2">
+          <HistoryPanel entries={(history ?? []) as AuditEntry[]} />
           <ZonesPanel zones={zones} />
           <PlansEditor key={`p${ok ?? error ?? ""}`} plans={plans ?? []} />
           <AddClient key={ok ?? error ?? ""} plans={plans ?? []} />
@@ -529,6 +532,48 @@ function ZoneIpList({ zone, kind, title }: { zone: Zone; kind: "panel" | "enlace
         <Button type="submit">Agregar</Button>
       </form>
     </section>
+  );
+}
+
+function HistoryPanel({ entries }: { entries: AuditEntry[] }) {
+  return (
+    <Dialog>
+      <DialogTrigger render={<Button variant="outline" size="sm" />}>Historial</DialogTrigger>
+      <DialogContent className="sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>Historial de acciones</DialogTitle>
+          <DialogDescription>Las últimas {entries.length} acciones de los administradores, de la más nueva a la más vieja.</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[65vh] overflow-y-auto">
+          {entries.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Fecha y hora</TableHead>
+                  <TableHead>Usuario</TableHead>
+                  <TableHead>Acción</TableHead>
+                  <TableHead>Detalle</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {entries.map((e) => (
+                  <TableRow key={e.id}>
+                    <TableCell className="whitespace-nowrap tabular-nums">
+                      {new Date(e.created_at).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Argentina/Buenos_Aires" })}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{e.actor_email ?? "—"}</TableCell>
+                    <TableCell className="font-medium">{e.action}</TableCell>
+                    <TableCell className="whitespace-normal">{e.detail}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <p className="text-sm text-muted-foreground">Todavía no hay acciones registradas.</p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
