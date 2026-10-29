@@ -11,7 +11,7 @@ import { PlanSelect, type Plan } from "@/components/plan-select";
 import { StatusBadge } from "@/components/status-badge";
 import { createAdminClient, requireAdmin } from "@/lib/supabase/server";
 import { Badge } from "@/components/ui/badge";
-import { ars } from "@/lib/utils";
+import { ars, cn } from "@/lib/utils";
 import { logout } from "../login/actions";
 import {
   addClient,
@@ -105,11 +105,14 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
 
   if (byAntenna) rows.sort((a, b) => antennaKey(a.antenna) - antennaKey(b.antenna) || a.full_name.localeCompare(b.full_name));
 
-  const receiptPaths = rows.flatMap((c) => (c.last?.receipt_path ? [c.last.receipt_path] : []));
+  const receiptPaths = rows.flatMap((c) => c.invoices.flatMap((i) => (i.receipt_path ? [i.receipt_path] : [])));
   const { data: signed } = receiptPaths.length
     ? await db.storage.from("comprobantes").createSignedUrls(receiptPaths, 3600)
     : { data: [] };
   const receiptUrl = new Map((signed ?? []).flatMap((s) => (s.path && s.signedUrl ? [[s.path, s.signedUrl] as const] : [])));
+
+  const [nowY, nowM] = new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }).split("-").map(Number);
+  const recentMonths = [2, 1, 0].map((k) => new Date(Date.UTC(nowY, nowM - 1 - k, 1)).toISOString().slice(0, 7));
 
   const planItems = [{ value: "all", label: "Todos los servicios" }, ...(plans ?? []).map((p) => ({ value: String(p.id), label: p.name }))];
   const months = [...new Set(all.flatMap((c) => c.invoices.map((i) => i.period.slice(0, 7))))].sort().reverse();
@@ -133,8 +136,8 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
 
   return (
     <main className="mx-auto w-full max-w-[90rem] space-y-6 p-4 sm:p-8">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Panel de administración</h1>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Panel de administración</h1>
         <div className="flex flex-wrap gap-2">
           <HistoryPanel entries={(history ?? []) as AuditEntry[]} />
           <ZonesPanel zones={zones} />
@@ -168,11 +171,11 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
             Clientes · {mesItems.find((m) => m.value === mes && m.value !== "all")?.label ?? currentMonth}
           </CardTitle>
           <CardDescription>
-            {mes === "all" ? "Se muestra la última factura de cada cliente." : "Se muestra la factura de este mes."}
+            Pagos de los últimos 3 meses de cada cliente. {mes === "all" ? "El estado de pago es el de la última factura." : "El estado de pago es el de este mes."}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
+          <Table className="max-md:[&_thead]:hidden max-md:[&_tr]:grid max-md:[&_tr]:grid-cols-2 max-md:[&_tr]:gap-x-4 max-md:[&_tr]:gap-y-3 max-md:[&_tr]:py-4 max-md:[&_td]:p-0 max-md:[&_td]:whitespace-normal">
             <TableHeader>
               <TableRow>
                 <TableHead>Cliente</TableHead>
@@ -186,19 +189,18 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                   </Link>
                 </TableHead>
                 <TableHead>Plan</TableHead>
-                <TableHead>{mes === "all" ? "Última factura" : "Factura del mes"}</TableHead>
+                <TableHead>Últimos 3 meses</TableHead>
                 <TableHead>Pago</TableHead>
                 <TableHead className="text-right">Acciones</TableHead>
-                <TableHead>Comprobante</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.map((c) => (
                 <TableRow key={c.id}>
-                  <TableCell>
-                    <ClientDetail client={c} zone={c.zone_id ? zoneName.get(c.zone_id) ?? null : null} />
+                  <TableCell className="max-md:col-span-2 max-md:text-base">
+                    <ClientDetail client={c} zone={c.zone_id ? zoneName.get(c.zone_id) ?? null : null} receiptUrl={receiptUrl} />
                   </TableCell>
-                  <TableCell>
+                  <TableCell data-label="Antena" className={MOBILE_LABEL}>
                     <div className="flex items-center gap-2">
                       <span className="font-mono">{c.antenna ?? "—"}</span>
                       {antennaUrl(c.antenna) ? (
@@ -218,22 +220,15 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell>{c.plans ? `${c.plans.name} · ${ars(c.plans.price)}` : "—"}</TableCell>
-                  <TableCell>
-                    {c.last ? (
-                      <>
-                        <div>{monto(c.last.amount)}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {c.last.period.slice(0, 7)} · {c.last.status === "paid" ? "pagada" : "pendiente"}
-                        </div>
-                      </>
-                    ) : "—"}
+                  <TableCell data-label="Plan" className={MOBILE_LABEL}>{c.plans ? `${c.plans.name} · ${ars(c.plans.price)}` : "—"}</TableCell>
+                  <TableCell data-label="Últimos 3 meses" className={MOBILE_LABEL}>
+                    <RecentMonths invoices={c.invoices} months={recentMonths} free={c.free} />
                   </TableCell>
-                  <TableCell>
+                  <TableCell data-label="Pago" className={cn(MOBILE_LABEL, "max-md:col-span-2")}>
                     {c.free ? (
                       <Badge variant="outline">Sin cargo</Badge>
                     ) : (
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <StatusBadge paid={c.paid} />
                         {c.last?.status === "pending" && <MarkPaid client={c} invoice={c.last} />}
                         {c.last?.status === "paid" && <UndoPayment client={c} invoice={c.last} />}
@@ -250,27 +245,49 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                       </form>
                     </div>
                   </TableCell>
-                  <TableCell className="space-x-1 text-right">
+                  <TableCell className="space-x-1 text-right max-md:col-span-2 max-md:text-left">
                     <EditPlan client={c} plans={plans ?? []} zones={zones} />
                     <DeleteClient client={c} />
-                  </TableCell>
-                  <TableCell>
-                    {c.last?.receipt_path && receiptUrl.get(c.last.receipt_path) ? (
-                      <ReceiptViewer client={c} invoice={c.last} url={receiptUrl.get(c.last.receipt_path)!} />
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
                   </TableCell>
                 </TableRow>
               ))}
               {!rows.length && (
-                <TableRow><TableCell colSpan={8} className="text-muted-foreground">Sin resultados.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="text-muted-foreground max-md:col-span-2">Sin resultados.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+const MOBILE_LABEL = "max-md:before:mb-1 max-md:before:block max-md:before:text-xs max-md:before:text-muted-foreground max-md:before:content-[attr(data-label)]";
+
+function RecentMonths({ invoices, months, free }: { invoices: Invoice[]; months: string[]; free: boolean }) {
+  return (
+    <div className="flex gap-1">
+      {months.map((m) => {
+        const inv = invoices.find((i) => i.period.startsWith(m));
+        const state = inv ? (inv.status === "paid" ? "pagado" : "no pagado") : free ? "sin cargo" : "sin factura";
+        const short = new Date(`${m}-15T12:00:00`).toLocaleDateString("es-AR", { month: "short" }).replace(".", "");
+        return (
+          <span
+            key={m}
+            title={`${monthLabel(m)}: ${state}`}
+            aria-label={`${monthLabel(m)}: ${state}`}
+            className={cn(
+              "inline-flex h-6 min-w-11 items-center justify-center rounded-md px-1.5 text-xs font-medium first-letter:uppercase",
+              inv?.status === "paid" && "bg-emerald-600 text-white",
+              inv?.status === "pending" && "bg-destructive/15 text-destructive",
+              !inv && "bg-muted text-muted-foreground",
+            )}
+          >
+            {short}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 
@@ -301,7 +318,7 @@ function ReceiptViewer({ client, invoice, url }: { client: Client; invoice: Invo
   const isPdf = invoice.receipt_path?.endsWith(".pdf");
   return (
     <Dialog>
-      <DialogTrigger render={<Button variant="outline" size="sm" />}>{isPdf ? "Ver PDF" : "Ver foto"}</DialogTrigger>
+      <DialogTrigger render={<Button variant="outline" size="xs" />}>{isPdf ? "Ver PDF" : "Ver foto"}</DialogTrigger>
       <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Comprobante · {client.full_name}</DialogTitle>
@@ -353,7 +370,7 @@ function MarkPaid({ client, invoice }: { client: Client; invoice: Invoice }) {
 const monthLabel = (period: string) =>
   new Date(`${period.slice(0, 7)}-15T12:00:00`).toLocaleDateString("es-AR", { month: "long", year: "numeric" });
 
-function ClientDetail({ client, zone }: { client: Client; zone: string | null }) {
+function ClientDetail({ client, zone, receiptUrl }: { client: Client; zone: string | null; receiptUrl: Map<string, string> }) {
   const invoices = [...client.invoices].sort((a, b) => b.period.localeCompare(a.period));
   return (
     <Dialog>
@@ -402,10 +419,15 @@ function ClientDetail({ client, zone }: { client: Client; zone: string | null })
                   </TableCell>
                   <TableCell className="text-right">
                     {i.status === "paid" && (
-                      <form action={undoPayment}>
-                        <input type="hidden" name="invoice_id" value={i.id} />
-                        <Button type="submit" variant="ghost" size="xs">Deshacer</Button>
-                      </form>
+                      <div className="flex items-center justify-end gap-1">
+                        {i.receipt_path && receiptUrl.get(i.receipt_path) && (
+                          <ReceiptViewer client={client} invoice={i} url={receiptUrl.get(i.receipt_path)!} />
+                        )}
+                        <form action={undoPayment}>
+                          <input type="hidden" name="invoice_id" value={i.id} />
+                          <Button type="submit" variant="ghost" size="xs">Deshacer</Button>
+                        </form>
+                      </div>
                     )}
                   </TableCell>
                 </TableRow>
@@ -504,8 +526,8 @@ function ZoneIpList({ zone, kind, title }: { zone: Zone; kind: "panel" | "enlace
       {ips.length ? (
         <ul className="space-y-2">
           {ips.map((p) => (
-            <li key={p.id} className="flex items-center gap-2">
-              <form action={updateZoneIp} className="flex flex-1 items-center gap-2">
+            <li key={p.id} className="flex flex-wrap items-center gap-2">
+              <form action={updateZoneIp} className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-2 sm:basis-0 sm:flex-nowrap">
                 <input type="hidden" name="id" value={p.id} />
                 <Input name="ip" defaultValue={p.ip} aria-label={`IP ${what}`} className="font-mono" required />
                 {kind === "panel" && <Input name="label" defaultValue={p.label ?? ""} placeholder="Nombre (opcional)" aria-label="Nombre" />}
@@ -524,7 +546,7 @@ function ZoneIpList({ zone, kind, title }: { zone: Zone; kind: "panel" | "enlace
       ) : (
         <p className="text-sm text-muted-foreground">Todavía no hay IPs {kind === "enlace" ? "de enlace" : "de paneles"}.</p>
       )}
-      <form key={ips.length} action={addZoneIp} className="flex gap-2 border-t pt-3">
+      <form key={ips.length} action={addZoneIp} className="flex flex-wrap gap-2 border-t pt-3 sm:flex-nowrap">
         <input type="hidden" name="zone_id" value={zone.id} />
         <input type="hidden" name="kind" value={kind} />
         <Input name="ip" placeholder={`IP ${what} nueva`} aria-label={`IP ${what} para ${zone.name}`} className="font-mono" required />

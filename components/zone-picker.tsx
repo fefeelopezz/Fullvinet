@@ -15,7 +15,7 @@ export function ZonePicker({ items, panels }: { items: { value: string; label: s
     <div className="space-y-4">
       <div className="space-y-1.5">
         <Label htmlFor="zone-search">Elegí una zona</Label>
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
           <Input
             id="zone-search"
             type="search"
