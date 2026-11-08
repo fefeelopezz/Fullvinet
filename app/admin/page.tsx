@@ -86,7 +86,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     const sorted = [...c.invoices].sort((a, b) => b.period.localeCompare(a.period));
     const last = mes === "all" ? sorted[0] : sorted.find((i) => i.period.startsWith(mes));
     if (mes !== "all" && !last) return [];
-    const paid = mes === "all" ? c.invoices.every((i) => i.status === "paid") : last?.status === "paid";
+    const paid = last?.status !== "pending";
     return [{ ...c, last, paid, free: c.payment_method === "sin_cargo" }];
   });
   const billable = clients.filter((c) => !c.free);
