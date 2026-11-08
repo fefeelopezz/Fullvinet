@@ -12,6 +12,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { createAdminClient, requireAdmin } from "@/lib/supabase/server";
 import { Badge } from "@/components/ui/badge";
 import { ars, cn } from "@/lib/utils";
+import { reminderLink, reminderText } from "@/lib/whatsapp";
 import { logout } from "../login/actions";
 import {
   addClient,
@@ -35,6 +36,7 @@ type Client = {
   id: string;
   full_name: string;
   email: string | null;
+  phone: string | null;
   antenna: string | null;
   payment_method: "transferencia" | "efectivo" | "sin_cargo" | null;
   plan_id: number | null;
@@ -49,6 +51,8 @@ export const instant = false;
 const METHOD_LABEL = { transferencia: "Transferencia", efectivo: "Efectivo", sin_cargo: "Sin cargo" } as const;
 
 const monto = (amount: number | null) => (amount == null ? "Sin plan" : ars(amount));
+const PHONE_HINT = "Ej.: 11 2345 6789 (con código de área, sin 0 ni 15)";
+const phoneLabel = (phone: string | null) => phone?.slice(3) ?? "";
 
 function antennaKey(antenna: string | null) {
   const m = antenna?.toUpperCase().replace(/[\s-]/g, "").match(/^([AB]?)(\d+)$/);
@@ -73,7 +77,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     requireAdmin(),
     db.from("plans").select("id, name, speed_mbps, price").order("speed_mbps"),
     db.from("profiles")
-      .select("id, full_name, email, antenna, payment_method, plan_id, zone_id, created_at, plans(name, price), invoices(id, status, period, amount, paid_at, receipt_path)")
+      .select("id, full_name, email, phone, antenna, payment_method, plan_id, zone_id, created_at, plans(name, price), invoices(id, status, period, amount, paid_at, receipt_path)")
       .eq("role", "user")
       .order("full_name"),
     db.from("zones").select("id, name, zone_ips(id, ip, label, kind)").order("name"),
@@ -105,7 +109,8 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
 
   if (byAntenna) rows.sort((a, b) => antennaKey(a.antenna) - antennaKey(b.antenna) || a.full_name.localeCompare(b.full_name));
 
-  const [nowY, nowM] = new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }).split("-").map(Number);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
+  const [nowY, nowM] = today.split("-").map(Number);
   const recentMonths = [2, 1, 0].map((k) => new Date(Date.UTC(nowY, nowM - 1 - k, 1)).toISOString().slice(0, 7));
 
   const planItems = [{ value: "all", label: "Todos los servicios" }, ...(plans ?? []).map((p) => ({ value: String(p.id), label: p.name }))];
@@ -225,6 +230,17 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                       <div className="flex flex-wrap items-center gap-2">
                         <StatusBadge paid={c.paid} />
                         {c.last?.status === "pending" && <MarkPaid client={c} invoice={c.last} />}
+                        {c.last?.status === "pending" && c.last.amount != null && (
+                          <a
+                            href={reminderLink(c.phone, reminderText(c.full_name, c.last.period, Number(c.last.amount), today))}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={c.phone ? `Abrir el chat con ${phoneLabel(c.phone)}` : "Sin WhatsApp cargado: elegí el contacto en WhatsApp"}
+                            className={buttonVariants({ variant: "outline", size: "xs" })}
+                          >
+                            Avisar
+                          </a>
+                        )}
                         {c.last?.status === "paid" && <UndoPayment client={c} invoice={c.last} />}
                       </div>
                     )}
@@ -382,6 +398,7 @@ function ClientDetail({ client, zone }: { client: Client; zone: string | null })
           <dt className="text-muted-foreground">Nombre y apellido</dt><dd>{client.full_name}</dd>
           <dt className="text-muted-foreground">Ubicación</dt><dd>{zone ?? "Sin zona asignada"}</dd>
           <dt className="text-muted-foreground">Antena</dt><dd className="font-mono">{client.antenna ?? "—"}</dd>
+          <dt className="text-muted-foreground">WhatsApp</dt><dd className="tabular-nums">{phoneLabel(client.phone) || "Sin cargar"}</dd>
           <dt className="text-muted-foreground">Plan</dt>
           <dd>{client.plans ? `${client.plans.name} · ${ars(client.plans.price)} por mes` : "Sin plan"}</dd>
           <dt className="text-muted-foreground">Medio de pago</dt>
@@ -654,6 +671,7 @@ function AddClient({ plans }: { plans: Plan[] }) {
   const fields = [
     { name: "full_name", label: "Nombre completo" },
     { name: "antenna", label: "Número de antena (opcional)", required: false, placeholder: "Ej.: 12, A12 o B3" },
+    { name: "phone", label: "WhatsApp (opcional, para los avisos)", required: false, type: "tel", placeholder: PHONE_HINT },
   ];
   return (
     <Dialog>
@@ -705,6 +723,10 @@ function EditPlan({ client, plans, zones }: { client: Client; plans: Plan[]; zon
           <div className="space-y-1.5">
             <Label htmlFor={`antenna-${client.id}`}>Número de antena</Label>
             <Input id={`antenna-${client.id}`} name="antenna" defaultValue={client.antenna ?? ""} placeholder="Ej.: 12, A12 o B3" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor={`phone-${client.id}`}>WhatsApp (para los avisos)</Label>
+            <Input id={`phone-${client.id}`} name="phone" type="tel" defaultValue={phoneLabel(client.phone)} placeholder={PHONE_HINT} />
           </div>
           <div className="space-y-1.5">
             <Label>Plan</Label>

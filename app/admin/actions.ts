@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminClient, logAction, requireAdmin } from "@/lib/supabase/server";
 import { ars } from "@/lib/utils";
+import { normalizePhone } from "@/lib/whatsapp";
 
 const MAX_PDF = 4 * 1024 * 1024;
 const back = (key: "ok" | "error", msg: string) => redirect(`/admin?${key}=${encodeURIComponent(msg)}`);
@@ -27,12 +28,22 @@ const receiptType = (b: Uint8Array) => {
 const antennaOf = (formData: FormData) =>
   String(formData.get("antenna") ?? "").toUpperCase().replace(/[\s-]/g, "") || null;
 const nameOf = (rel: unknown, key = "full_name") => (rel as Record<string, string> | null)?.[key] ?? "";
+const phoneOf = (formData: FormData) => {
+  const raw = String(formData.get("phone") ?? "").trim();
+  if (!raw) return null;
+  const phone = normalizePhone(raw);
+  if (!phone) back("error", "WhatsApp inválido: poné el código de área y el número, sin 0 ni 15 (ej.: 11 2345 6789)");
+  return phone;
+};
+const saveError = (error: { code?: string; message: string }) =>
+  back("error", error.code === "23505" ? "Ese WhatsApp ya está asignado a otro cliente" : error.message);
 
 export async function addClient(formData: FormData) {
   const { profile: me } = await requireAdmin();
   const full_name = String(formData.get("full_name") ?? "").trim();
   const antenna = antennaOf(formData);
   const payment_method = methodOf(formData);
+  const phone = phoneOf(formData);
   const planId = Number(formData.get("plan_id"));
   if (!full_name || !planId) back("error", "Completá nombre y plan");
 
@@ -42,10 +53,10 @@ export async function addClient(formData: FormData) {
 
   const { data: client, error } = await db
     .from("profiles")
-    .insert({ full_name, antenna, payment_method, plan_id: plan!.id })
+    .insert({ full_name, antenna, payment_method, phone, plan_id: plan!.id })
     .select("id")
     .single();
-  if (error) back("error", error.message);
+  if (error) saveError(error);
   if (payment_method !== "sin_cargo") {
     const { error: invErr } = await db
       .from("invoices")
@@ -124,10 +135,11 @@ export async function updateClient(formData: FormData) {
       plan_id: plan!.id,
       antenna: antennaOf(formData),
       payment_method: methodOf(formData),
+      phone: phoneOf(formData),
       zone_id: Number(formData.get("zone_id")) || null,
     })
     .eq("id", id);
-  if (error) back("error", error.message);
+  if (error) saveError(error);
   const { error: invErr } = await db
     .from("invoices")
     .update({ amount: plan!.price })
