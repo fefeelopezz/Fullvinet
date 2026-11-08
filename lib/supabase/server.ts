@@ -3,7 +3,7 @@ import { createServerClient } from "@supabase/ssr";
 import { createClient as createSbClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { connection } from "next/server";
+import { after, connection } from "next/server";
 
 export async function createClient() {
   const cookieStore = await cookies();
@@ -33,19 +33,22 @@ export function createAdminClient() {
 export async function getProfile() {
   await connection();
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  const { data } = await supabase.auth.getClaims();
+  const userId = data?.claims.sub;
+  if (!userId) redirect("/login");
   const { data: profile } = await supabase
     .from("profiles")
     .select("id, full_name, email, address, role, plan_id, plans(name, speed_mbps, price)")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
   if (!profile) redirect("/login");
   return { supabase, profile };
 }
 
 export async function logAction(actor: { id: string; email: string | null }, action: string, detail?: string) {
-  await createAdminClient().from("audit_log").insert({ actor_id: actor.id, actor_email: actor.email, action, detail: detail ?? null });
+  after(async () => {
+    await createAdminClient().from("audit_log").insert({ actor_id: actor.id, actor_email: actor.email, action, detail: detail ?? null });
+  });
 }
 
 export async function requireAdmin() {

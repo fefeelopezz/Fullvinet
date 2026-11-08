@@ -64,13 +64,13 @@ function antennaUrl(antenna: string | null) {
 }
 
 export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
-  await requireAdmin();
   const { q = "", plan = "all", estado = "all", mes = "all", orden = "nombre", error, ok } = (await searchParams) as Record<string, string>;
   const byAntenna = orden === "antena";
   const sortHref = `?${new URLSearchParams({ q, plan, mes, estado, ...(byAntenna ? {} : { orden: "antena" }) })}`;
   const db = createAdminClient();
 
-  const [{ data: plans }, { data }, { data: zoneData }, { data: history }] = await Promise.all([
+  const [, { data: plans }, { data }, { data: zoneData }, { data: history }] = await Promise.all([
+    requireAdmin(),
     db.from("plans").select("id, name, speed_mbps, price").order("speed_mbps"),
     db.from("profiles")
       .select("id, full_name, email, antenna, payment_method, plan_id, zone_id, created_at, plans(name, price), invoices(id, status, period, amount, paid_at, receipt_path)")
@@ -104,12 +104,6 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   );
 
   if (byAntenna) rows.sort((a, b) => antennaKey(a.antenna) - antennaKey(b.antenna) || a.full_name.localeCompare(b.full_name));
-
-  const receiptPaths = rows.flatMap((c) => c.invoices.flatMap((i) => (i.receipt_path ? [i.receipt_path] : [])));
-  const { data: signed } = receiptPaths.length
-    ? await db.storage.from("comprobantes").createSignedUrls(receiptPaths, 3600)
-    : { data: [] };
-  const receiptUrl = new Map((signed ?? []).flatMap((s) => (s.path && s.signedUrl ? [[s.path, s.signedUrl] as const] : [])));
 
   const [nowY, nowM] = new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }).split("-").map(Number);
   const recentMonths = [2, 1, 0].map((k) => new Date(Date.UTC(nowY, nowM - 1 - k, 1)).toISOString().slice(0, 7));
@@ -198,7 +192,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
               {rows.map((c) => (
                 <TableRow key={c.id}>
                   <TableCell className="max-md:col-span-2 max-md:text-base">
-                    <ClientDetail client={c} zone={c.zone_id ? zoneName.get(c.zone_id) ?? null : null} receiptUrl={receiptUrl} />
+                    <ClientDetail client={c} zone={c.zone_id ? zoneName.get(c.zone_id) ?? null : null} />
                   </TableCell>
                   <TableCell data-label="Antena" className={MOBILE_LABEL}>
                     <div className="flex items-center gap-2">
@@ -370,7 +364,7 @@ function MarkPaid({ client, invoice }: { client: Client; invoice: Invoice }) {
 const monthLabel = (period: string) =>
   new Date(`${period.slice(0, 7)}-15T12:00:00`).toLocaleDateString("es-AR", { month: "long", year: "numeric" });
 
-function ClientDetail({ client, zone, receiptUrl }: { client: Client; zone: string | null; receiptUrl: Map<string, string> }) {
+function ClientDetail({ client, zone }: { client: Client; zone: string | null }) {
   const invoices = [...client.invoices].sort((a, b) => b.period.localeCompare(a.period));
   return (
     <Dialog>
@@ -420,8 +414,8 @@ function ClientDetail({ client, zone, receiptUrl }: { client: Client; zone: stri
                   <TableCell className="text-right">
                     {i.status === "paid" && (
                       <div className="flex items-center justify-end gap-1">
-                        {i.receipt_path && receiptUrl.get(i.receipt_path) && (
-                          <ReceiptViewer client={client} invoice={i} url={receiptUrl.get(i.receipt_path)!} />
+                        {i.receipt_path && (
+                          <ReceiptViewer client={client} invoice={i} url={`/admin/comprobante/${encodeURIComponent(i.receipt_path)}`} />
                         )}
                         <form action={undoPayment}>
                           <input type="hidden" name="invoice_id" value={i.id} />
