@@ -28,16 +28,28 @@ export function noticeFor(period: string, today: string): NoticeKind | null {
 export function noticeParams(kind: NoticeKind, name: string, period: string, amount: number) {
   const month = new Date(`${period.slice(0, 7)}-15T12:00:00Z`).toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: "UTC" });
   const due = new Date(`${dueDate(period)}T12:00:00Z`).toLocaleDateString("es-AR", { day: "numeric", month: "long", timeZone: "UTC" });
-  const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(amount);
-  return [name, month, money, kind === "vencimiento" ? "hoy" : `el ${due}`];
+  return [name, month, money(amount), kind === "vencimiento" ? "hoy" : `el ${due}`];
 }
 
-export function reminderText(name: string, period: string, amount: number, today: string) {
-  const due = dueDate(period);
-  const [, , money] = noticeParams("antes", name, period, amount);
+const money = (amount: number) =>
+  new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(amount);
+
+export function reminderText(name: string, debts: { period: string; amount: number }[], today: string) {
+  const sorted = [...debts].sort((a, b) => a.period.localeCompare(b.period));
+  const monthOf = (period: string) =>
+    new Date(`${period.slice(0, 7)}-15T12:00:00Z`).toLocaleDateString("es-AR", { month: "long", timeZone: "UTC" }) +
+    (period.startsWith(today.slice(0, 4)) ? "" : ` ${period.slice(0, 4)}`);
+  const due = dueDate(sorted.at(-1)!.period);
   const day = `${due.slice(8)}/${due.slice(5, 7)}`;
   const when = today === due ? "vence hoy" : today > due ? `venció el ${day}` : `vence el ${day}`;
-  return `Hola ${name}, te recordamos que tu factura de internet Fullvinet por ${money} ${when}. ¡Gracias!`;
+  if (sorted.length === 1) {
+    const [d] = sorted;
+    return `Hola ${name}, te recordamos que tu factura Fullvinet de ${monthOf(d.period)} por ${money(d.amount)} ${when}. Saludos.`;
+  }
+  const items = sorted.map((d) => `${monthOf(d.period)} (${money(d.amount)})`);
+  const list = `${items.slice(0, -1).join(", ")} y ${items.at(-1)}`;
+  const total = money(sorted.reduce((sum, d) => sum + d.amount, 0));
+  return `Hola ${name}, te recordamos que tenés ${sorted.length} facturas Fullvinet pendientes: ${list}. Total: ${total}. Saludos.`;
 }
 
 export function reminderLink(phone: string | null, text: string) {

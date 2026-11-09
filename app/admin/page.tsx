@@ -94,7 +94,8 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     const last = mes === "all" ? target ?? sorted[0] : target;
     if (mes !== "all" && !last) return [];
     const paid = last?.status !== "pending";
-    return [{ ...c, last, target, paid, free: c.payment_method === "sin_cargo" }];
+    const debts = c.invoices.flatMap((i) => (i.status === "pending" && i.amount != null ? [{ period: i.period, amount: Number(i.amount) }] : []));
+    return [{ ...c, last, target, paid, debts, free: c.payment_method === "sin_cargo" }];
   });
   const billable = clients.filter((c) => !c.free);
   const unpaid = billable.filter((c) => !c.paid).length;
@@ -248,9 +249,9 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                       <div className="flex flex-wrap items-center gap-2">
                         <StatusBadge paid={c.paid} />
                         {c.target?.status === "pending" && <MarkPaid client={c} invoice={c.target} />}
-                        {c.last?.status === "pending" && c.last.amount != null && (
+                        {c.debts.length > 0 && (
                           <a
-                            href={reminderLink(c.phone, reminderText(c.full_name, c.last.period, Number(c.last.amount), today))}
+                            href={reminderLink(c.phone, reminderText(c.full_name, c.debts, today))}
                             target="_blank"
                             rel="noopener noreferrer"
                             title={c.phone ? `Abrir el chat con ${phoneLabel(c.phone)}` : "Sin WhatsApp cargado: elegí el contacto en WhatsApp"}
