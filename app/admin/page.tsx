@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ZonePicker } from "@/components/zone-picker";
+import { Toast } from "@/components/toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PlanSelect, type Plan } from "@/components/plan-select";
 import { StatusBadge } from "@/components/status-badge";
@@ -68,7 +69,7 @@ function antennaUrl(antenna: string | null) {
 }
 
 export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
-  const { q = "", plan = "all", estado = "all", mes = "all", orden = "nombre", error, ok } = (await searchParams) as Record<string, string>;
+  const { q = "", plan = "all", estado = "all", mes = "all", orden = "nombre", error, ok, t } = (await searchParams) as Record<string, string>;
   const byAntenna = orden === "antena";
   const sortHref = `?${new URLSearchParams({ q, plan, mes, estado, ...(byAntenna ? {} : { orden: "antena" }) })}`;
   const db = createAdminClient();
@@ -86,16 +87,17 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const zones = (zoneData ?? []) as Zone[];
   const zoneName = new Map(zones.map((z) => [z.id, z.name]));
   const all = (data ?? []) as unknown as Client[];
+  const moneyMonth = mes === "all" ? new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }).slice(0, 7) : mes;
   const clients = all.flatMap((c) => {
     const sorted = [...c.invoices].sort((a, b) => b.period.localeCompare(a.period));
-    const last = mes === "all" ? sorted[0] : sorted.find((i) => i.period.startsWith(mes));
+    const target = sorted.find((i) => i.period.startsWith(moneyMonth));
+    const last = mes === "all" ? target ?? sorted[0] : target;
     if (mes !== "all" && !last) return [];
     const paid = last?.status !== "pending";
-    return [{ ...c, last, paid, free: c.payment_method === "sin_cargo" }];
+    return [{ ...c, last, target, paid, free: c.payment_method === "sin_cargo" }];
   });
   const billable = clients.filter((c) => !c.free);
   const unpaid = billable.filter((c) => !c.paid).length;
-  const moneyMonth = mes === "all" ? new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }).slice(0, 7) : mes;
   const inScope = billable.flatMap((c) => c.invoices.filter((i) => i.period.startsWith(moneyMonth)));
   const total = (status: string) => inScope.reduce((sum, i) => sum + (i.status === status ? Number(i.amount ?? 0) : 0), 0);
 
@@ -146,8 +148,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
         </div>
       </header>
 
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      {ok && <p role="status" className="text-sm text-primary">{ok}</p>}
+      <Toast key={t} message={error ?? ok} error={!!error} />
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat title="Clientes" value={clients.length} />
@@ -170,8 +171,13 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
             Clientes · {mesItems.find((m) => m.value === mes && m.value !== "all")?.label ?? currentMonth}
           </CardTitle>
           <CardDescription>
-            Pagos de los últimos 3 meses de cada cliente. {mes === "all" ? "El estado de pago es el de la última factura." : "El estado de pago es el de este mes."}
+            Pagos de los últimos 3 meses de cada cliente. {mes === "all" ? "El estado de pago y los cobros son del mes actual." : "El estado de pago y los cobros son de este mes."}
           </CardDescription>
+          <form id="cobro-masivo" action={markPaid} className="pt-2">
+            <Button type="submit" size="sm">
+              Marcar seleccionados como pagados · <span className="first-letter:uppercase">{monthLabel(moneyMonth)}</span>
+            </Button>
+          </form>
         </CardHeader>
         <CardContent>
           <Table className="max-md:[&_thead]:hidden max-md:[&_tr]:grid max-md:[&_tr]:grid-cols-2 max-md:[&_tr]:gap-x-4 max-md:[&_tr]:gap-y-3 max-md:[&_tr]:py-4 max-md:[&_td]:p-0 max-md:[&_td]:whitespace-normal">
@@ -197,7 +203,19 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
               {rows.map((c) => (
                 <TableRow key={c.id}>
                   <TableCell className="max-md:col-span-2 max-md:text-base">
-                    <ClientDetail client={c} zone={c.zone_id ? zoneName.get(c.zone_id) ?? null : null} />
+                    <div className="flex items-center gap-2">
+                      {!c.free && c.target?.status === "pending" && (
+                        <input
+                          type="checkbox"
+                          name="invoice_id"
+                          value={c.target.id}
+                          form="cobro-masivo"
+                          aria-label={`Seleccionar a ${c.full_name}`}
+                          className="size-4 accent-primary"
+                        />
+                      )}
+                      <ClientDetail client={c} zone={c.zone_id ? zoneName.get(c.zone_id) ?? null : null} />
+                    </div>
                   </TableCell>
                   <TableCell data-label="Antena" className={MOBILE_LABEL}>
                     <div className="flex items-center gap-2">
@@ -229,7 +247,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                     ) : (
                       <div className="flex flex-wrap items-center gap-2">
                         <StatusBadge paid={c.paid} />
-                        {c.last?.status === "pending" && <MarkPaid client={c} invoice={c.last} />}
+                        {c.target?.status === "pending" && <MarkPaid client={c} invoice={c.target} />}
                         {c.last?.status === "pending" && c.last.amount != null && (
                           <a
                             href={reminderLink(c.phone, reminderText(c.full_name, c.last.period, Number(c.last.amount), today))}
@@ -353,27 +371,12 @@ function ReceiptViewer({ client, invoice, url }: { client: Client; invoice: Invo
 
 function MarkPaid({ client, invoice }: { client: Client; invoice: Invoice }) {
   return (
-    <Dialog>
-      <DialogTrigger render={<Button variant="secondary" size="xs" />}>Marcar pagada</DialogTrigger>
-      <DialogContent>
-        <form action={markPaid} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>Marcar como pagada</DialogTitle>
-            <DialogDescription>
-              {client.full_name} · {invoice.period.slice(0, 7)} · {monto(invoice.amount)}
-            </DialogDescription>
-          </DialogHeader>
-          <input type="hidden" name="invoice_id" value={invoice.id} />
-          <div className="space-y-1.5">
-            <Label htmlFor={`receipt-${invoice.id}`}>Comprobante en PDF o foto (opcional, hasta 4 MB)</Label>
-            <Input id={`receipt-${invoice.id}`} name="receipt" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" />
-          </div>
-          <DialogFooter>
-            <Button type="submit">Confirmar pago</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <form action={markPaid}>
+      <input type="hidden" name="invoice_id" value={invoice.id} />
+      <Button type="submit" variant="secondary" size="xs" aria-label={`Marcar pagada la factura de ${client.full_name} de ${monthLabel(invoice.period)}`}>
+        Marcar pagada
+      </Button>
+    </form>
   );
 }
 

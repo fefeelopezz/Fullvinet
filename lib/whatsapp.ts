@@ -34,9 +34,10 @@ export function noticeParams(kind: NoticeKind, name: string, period: string, amo
 
 export function reminderText(name: string, period: string, amount: number, today: string) {
   const due = dueDate(period);
-  const [, month, money, dueLabel] = noticeParams("antes", name, period, amount);
-  const when = today === due ? "vence hoy" : today > due ? `venció ${dueLabel}` : `vence ${dueLabel}`;
-  return `Hola ${name}, te recordamos que tu factura de internet de Fullvinet de ${month} por ${money} ${when}. Si ya pagaste, ignorá este mensaje. ¡Gracias!`;
+  const [, , money] = noticeParams("antes", name, period, amount);
+  const day = `${due.slice(8)}/${due.slice(5, 7)}`;
+  const when = today === due ? "vence hoy" : today > due ? `venció el ${day}` : `vence el ${day}`;
+  return `Hola ${name}, te recordamos que tu factura de internet Fullvinet por ${money} ${when}. ¡Gracias!`;
 }
 
 export function reminderLink(phone: string | null, text: string) {
