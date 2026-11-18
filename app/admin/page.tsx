@@ -74,7 +74,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   const sortHref = `?${new URLSearchParams({ q, plan, mes, estado, ...(byAntenna ? {} : { orden: "antena" }) })}`;
   const db = createAdminClient();
 
-  const [, { data: plans }, { data }, { data: zoneData }, { data: history }] = await Promise.all([
+  const [, { data: plans, error: e1 }, { data, error: e2 }, { data: zoneData, error: e3 }, { data: history, error: e4 }] = await Promise.all([
     requireAdmin(),
     db.from("plans").select("id, name, speed_mbps, price").order("speed_mbps"),
     db.from("profiles")
@@ -84,6 +84,8 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
     db.from("zones").select("id, name, zone_ips(id, ip, label, kind)").order("name"),
     db.from("audit_log").select("id, created_at, actor_email, action, detail").order("created_at", { ascending: false }).limit(300),
   ]);
+  const loadError = e1 ?? e2 ?? e3 ?? e4;
+  if (loadError) console.error("No se pudieron cargar los datos del panel:", loadError.message);
   const zones = (zoneData ?? []) as Zone[];
   const zoneName = new Map(zones.map((z) => [z.id, z.name]));
   const all = (data ?? []) as unknown as Client[];
@@ -165,6 +167,16 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
         {byAntenna && <input type="hidden" name="orden" value="antena" />}
         <Button type="submit" variant="secondary">Buscar</Button>
       </form>
+
+      {loadError && (
+        <div role="alert" className="flex flex-col gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            <span className="font-medium text-destructive">No se pudieron cargar los datos.</span>{" "}
+            La lista puede estar incompleta o vacía. Esperá unos segundos y recargá la página.
+          </p>
+          <a href="" className={buttonVariants({ variant: "outline", size: "sm" })}>Recargar</a>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -281,7 +293,7 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
                 </TableRow>
               ))}
               {!rows.length && (
-                <TableRow><TableCell colSpan={6} className="text-muted-foreground max-md:col-span-2">Sin resultados.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="text-muted-foreground max-md:col-span-2">{loadError ? "No se pudieron cargar los clientes." : "Sin resultados."}</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
